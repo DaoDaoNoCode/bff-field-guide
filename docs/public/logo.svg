@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 320" fill="none">
+  <style>
+    @keyframes drawPath {
+      0% { stroke-dashoffset: 200; }
+      50% { stroke-dashoffset: 0; }
+      100% { stroke-dashoffset: -200; }
+    }
+    @keyframes pulse1 {
+      0%, 100% { r: 6; opacity: 0.9; }
+      50% { r: 8; opacity: 1; }
+    }
+    @keyframes pulse2 {
+      0%, 100% { r: 6; opacity: 0.9; }
+      50% { r: 8; opacity: 1; }
+    }
+    @keyframes pulseCenter {
+      0%, 100% { r: 10; opacity: 0.8; }
+      50% { r: 13; opacity: 1; }
+    }
+    @keyframes fadeGlow {
+      0%, 100% { opacity: 0.08; }
+      50% { opacity: 0.18; }
+    }
+    @keyframes dotFlow1 {
+      0% { offset-distance: 0%; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { offset-distance: 100%; opacity: 0; }
+    }
+    @keyframes dotFlow2 {
+      0% { offset-distance: 0%; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { offset-distance: 100%; opacity: 0; }
+    }
+    .flow-line {
+      stroke-dasharray: 8 12;
+      animation: drawPath 3s linear infinite;
+    }
+    .node-ts { animation: pulse1 3s ease-in-out infinite; }
+    .node-go { animation: pulse2 3s ease-in-out infinite 0.5s; }
+    .node-bff { animation: pulseCenter 2.5s ease-in-out infinite 0.25s; }
+    .glow { animation: fadeGlow 3s ease-in-out infinite; }
+    .dot1 {
+      offset-path: path('M 100,160 C 140,100 160,100 200,160');
+      animation: dotFlow1 2.4s linear infinite;
+    }
+    .dot2 {
+      offset-path: path('M 200,160 C 240,220 260,220 300,160');
+      animation: dotFlow2 2.4s linear infinite 1.2s;
+    }
+  </style>
+
+  <!-- Soft glow behind center node -->
+  <circle cx="200" cy="160" r="60" fill="#0d9488" class="glow"/>
+
+  <!-- Connection curves -->
+  <!-- TS → BFF -->
+  <path d="M 100,160 C 140,100 160,100 200,160" stroke="#d97706" stroke-width="2.5" fill="none" class="flow-line" opacity="0.6"/>
+  <!-- BFF → Go -->
+  <path d="M 200,160 C 240,220 260,220 300,160" stroke="#0d9488" stroke-width="2.5" fill="none" class="flow-line" opacity="0.6"/>
+
+  <!-- Flowing dots along paths -->
+  <circle r="3" fill="#fbbf24" class="dot1"/>
+  <circle r="3" fill="#2dd4bf" class="dot2"/>
+
+  <!-- TypeScript node (left) -->
+  <circle cx="100" cy="160" r="28" fill="#d97706" opacity="0.12"/>
+  <circle cx="100" cy="160" class="node-ts" fill="#d97706"/>
+  <text x="100" y="210" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d97706" opacity="0.8">TS</text>
+
+  <!-- BFF node (center) -->
+  <circle cx="200" cy="160" r="36" fill="#0d9488" opacity="0.1"/>
+  <circle cx="200" cy="160" class="node-bff" fill="#0d9488"/>
+  <text x="200" y="210" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#0d9488" opacity="0.8">BFF</text>
+
+  <!-- Go node (right) -->
+  <circle cx="300" cy="160" r="28" fill="#0d9488" opacity="0.12"/>
+  <circle cx="300" cy="160" class="node-go" fill="#2dd4bf"/>
+  <text x="300" y="210" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#2dd4bf" opacity="0.8">Go</text>
+
+  <!-- Subtle orbital ring around BFF -->
+  <ellipse cx="200" cy="160" rx="50" ry="20" stroke="#0d9488" stroke-width="1" fill="none" opacity="0.15" transform="rotate(-20, 200, 160)"/>
+</svg>
