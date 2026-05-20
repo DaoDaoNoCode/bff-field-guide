@@ -343,6 +343,20 @@ fmt.Println(counter.Value())  // 0 -- still zero! The increment was lost.
 
 What just happened? `BrokenIncrement` used a value receiver, so it got a copy of the counter. It incremented the copy's count to 1, but the original counter stayed at 0. The copy was thrown away when the method returned.
 
+An important detail: the copy is made **at the moment of each call**, not once when the struct is created. Every method call with a value receiver takes a fresh snapshot:
+
+```go
+counter := Counter{count: 0}  // Original counter, count = 0
+counter.count = 5              // Directly change count to 5
+
+counter.Value()                // Go copies counter NOW (count = 5), returns 5 ✅
+counter.BrokenIncrement()      // Go copies counter NOW (count = 5), copy becomes 6
+                               // ...but the copy is thrown away
+counter.Value()                // Go copies counter NOW (still count = 5), returns 5
+```
+
+So `Value()` always reflects the current state — it's not frozen from initialization. The problem with `BrokenIncrement()` isn't that it reads stale data, it's that its changes are written to a copy that gets discarded.
+
 ::: tip The practical rule for BFF code
 **Use pointer receivers (`*App`) for everything in BFF code.** Your BFF's `App` struct holds a logger, configuration, service clients, and other state. You always want methods to access the same shared instance, not a copy. Value receivers are mainly for small, immutable types like coordinates or colors.
 

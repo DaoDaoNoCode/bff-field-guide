@@ -65,11 +65,75 @@ type User struct {
 In Go, whether a name starts with a capital letter determines whether it's accessible from other packages. `Name` is public, `name` is private. This applies to struct fields, functions, types -- everything. It's enforced by the compiler, not just a convention.
 :::
 
+You might wonder: what does "private" actually mean here? Can other packages create a `User` with `age` set? Can they read `user.age`? Let's see exactly what happens when another package imports this `User` type:
+
+```go
+// In another package that imports the "users" package:
+
+u := users.User{                // ✅ Can create a User (the type name "User" is uppercase = public)
+    Name:  "Alice",             // ✅ Can set Name (uppercase = public)
+    Email: "alice@example.com", // ✅ Can set Email (uppercase = public)
+    age:   30,                  // ❌ COMPILE ERROR: cannot refer to unexported field 'age'
+}
+
+fmt.Println(u.Name)             // ✅ Can read Name
+fmt.Println(u.age)              // ❌ COMPILE ERROR: u.age undefined (cannot refer to unexported field)
+u.age = 25                      // ❌ COMPILE ERROR: same reason
+```
+
+The bottom line: **other packages can't set `age` during initialization AND can't read or write `age` afterward.** The field is completely invisible to code outside the package — as if it doesn't exist.
+
+This means if you want outsiders to read `age`, you provide a method:
+
+```go
+// Inside the "users" package — same package as User, so 'age' is accessible
+func (u User) Age() int {       // Method name "Age" is uppercase = public
+    return u.age                // We can access 'age' because we're in the same package
+}
+
+// Now other packages can do:
+fmt.Println(u.Age())            // ✅ Calls the public method, which reads the private field
+```
+
+This is exactly like TypeScript's `private` + getter pattern:
+
+```ts
+class User {
+  public name: string;
+  private age: number;           // Can't be accessed from outside
+
+  get userAge(): number {        // Public getter for the private field
+    return this.age;
+  }
+}
+```
+
+The difference: TypeScript's `private` is a compiler hint that disappears at runtime (you can still access `obj['age']` in JavaScript). Go's lowercase visibility is enforced at compile time AND there's no workaround — `age` truly does not exist from outside the package.
+
+::: tip When to use private fields
+Private fields show up constantly in BFF code. Here are the most common reasons:
+
+- **Internal state** — the `App` struct has private fields like `config`, `logger`, `k8sClient` that handlers use internally but no outside package should touch or replace
+- **Read-only access** — a field is set once at creation (like an `id`) and exposed via a public getter method, preventing anyone from changing it
+- **Validation** — instead of letting consumers assign any value, you force them through a `SetAge(n int) error` method that rejects invalid input
+- **JSON safety** — unexported fields are automatically excluded from `json.Marshal`, so sensitive data like tokens or internal IDs never leaks into API responses
+
+You'll see the `App` struct pattern in every BFF — all its fields are private:
+
+```go
+type App struct {
+    config    *config.EnvConfig    // lowercase = only handlers in this package can access
+    logger    *slog.Logger         // the App controls its own dependencies
+    k8sClient kubernetes.Client    // outside code interacts through public methods, not fields
+}
+```
+:::
+
 <div class="checkpoint">
 
 #### Checkpoint
 
-A Go `struct` is like a TypeScript `interface` that you can actually create instances of. Fields with capital first letters are public; lowercase first letters are private to the package. No commas or semicolons between fields.
+A Go `struct` is like a TypeScript `interface` that you can actually create instances of. Fields with capital first letters are public; lowercase first letters are private to the package — invisible to outside code for both reading and writing. No commas or semicolons between fields.
 
 </div>
 
@@ -197,158 +261,28 @@ Access and modify struct fields with dot notation: `user.Name`, `user.Age = 31`.
 
 </div>
 
-## Struct Tags -- Critical for BFF Work
+## Struct Tags -- A Quick Preview
 
-This is where structs go from "like TypeScript interfaces" to "actually more powerful for API work." Struct tags are metadata annotations that tell libraries how to handle each field. They're written in backticks after the field type, and they're the reason Go is so good for JSON APIs.
-
-Let's build this up step by step.
-
-### What happens WITHOUT struct tags
-
-First, let's see what Go does by default when you convert a struct to JSON:
-
-```go
-type Model struct {            // A struct with no JSON tags
-    ID          string         // Field name: ID
-    DisplayName string         // Field name: DisplayName
-    CreatedAt   string         // Field name: CreatedAt
-}
-```
-
-If you convert this to JSON (we'll cover how in the JSON chapter), you get:
-
-```json
-{
-  "ID": "abc-123",
-  "DisplayName": "My Model",
-  "CreatedAt": "2024-01-15T10:30:00Z"
-}
-```
-
-The JSON field names match the Go field names exactly -- capital letters and all. That's not great for an API. Most APIs use `snake_case` or `camelCase` for JSON field names, not `PascalCase`.
-
-### What happens WITH struct tags
-
-Now let's add struct tags:
+You'll notice backtick annotations after field types in most Go structs. These are called **struct tags**, and they control how the field behaves in JSON:
 
 ```go
 type Model struct {
-    ID          string `json:"id"`              // This tag says: "In JSON, call this field 'id'"
-                                                 // The backtick string after the type is the struct tag
-    DisplayName string `json:"display_name"`     // In JSON, call this "display_name" (snake_case)
-    CreatedAt   string `json:"created_at"`       // In JSON, call this "created_at"
+    ID          string `json:"id"`              // In JSON, this field becomes "id" (lowercase)
+                                                 // Without the tag, it would be "ID" (matching Go's name)
+    DisplayName string `json:"display_name"`     // In JSON, becomes "display_name" (snake_case)
+    CreatedAt   string `json:"created_at"`       // In JSON, becomes "created_at"
 }
 ```
 
-Now the JSON output becomes:
+Without tags, Go uses the field name as-is for JSON keys — which means `PascalCase` in your API responses. Tags let you bridge Go's naming convention (PascalCase) with your API's convention (usually `snake_case` or `camelCase`).
 
-```json
-{
-  "id": "abc-123",
-  "display_name": "My Model",
-  "created_at": "2024-01-15T10:30:00Z"
-}
-```
-
-What just happened? The struct tags told Go's JSON library to use different names when converting to and from JSON. The Go code uses `DisplayName` (PascalCase, Go convention), but the JSON uses `display_name` (snake_case, API convention). The tag bridges the gap.
-
-In TypeScript, you'd need a mapping function or a library like `class-transformer` to do this. In Go, it's built into the struct definition.
-
-### The `omitempty` option
-
-Sometimes you want to leave a field out of the JSON entirely if it has no value. That's what `omitempty` does:
-
-```go
-type Model struct {
-    ID          string `json:"id"`                       // Always included in JSON
-    DisplayName string `json:"display_name"`             // Always included in JSON
-    Description string `json:"description,omitempty"`    // Only included if not empty string
-                                                          // The comma separates the name from the option
-                                                          // "omitempty" means: skip this field if it's a zero value
-}
-```
-
-Let's see what happens:
-
-```go
-model := Model{                // Create a model with no description
-    ID:          "abc-123",    // Set the ID
-    DisplayName: "My Model",   // Set the display name
-                               // Description is not set -- it's "" (zero value for string)
-}
-```
-
-The JSON output:
-
-```json
-{
-  "id": "abc-123",
-  "display_name": "My Model"
-}
-```
-
-The `description` field is completely absent from the JSON because its value was `""` (the zero value for strings), and we used `omitempty`. Without `omitempty`, it would appear as `"description": ""`.
-
-### The `json:"-"` option -- hide a field
-
-Sometimes you have a field that should never appear in JSON output. Maybe it's an internal ID, a cached value, or sensitive data:
-
-```go
-type Model struct {
-    ID          string `json:"id"`             // Appears in JSON as "id"
-    DisplayName string `json:"display_name"`   // Appears in JSON as "display_name"
-    InternalKey string `json:"-"`              // NEVER appears in JSON output
-                                               // The dash means "skip this field completely"
-                                               // Useful for internal tracking, secrets, etc.
-}
-```
-
-With `json:"-"`, the `InternalKey` field is completely invisible to the JSON encoder and decoder. It exists in your Go code, but it's never sent to or read from clients.
-
-### Struct tags -- the complete picture
-
-Here's a summary of the tag options you'll use most:
-
-| Tag | JSON behavior | Example |
-|---|---|---|
-| `` `json:"name"` `` | Use "name" as the JSON key | `json:"display_name"` |
-| `` `json:"name,omitempty"` `` | Use "name", omit if zero value | `json:"description,omitempty"` |
-| `` `json:"-"` `` | Never include in JSON | `json:"-"` |
-| `` `json:",omitempty"` `` | Use the Go field name, omit if zero | `json:",omitempty"` |
-
-::: tip Comparing to TypeScript
-In TypeScript, you'd handle JSON field mapping one of these ways:
-
-```ts
-// Option 1: Match the API naming in your type (ugly camelCase/snake_case mix)
-interface Model {
-  display_name: string;  // snake_case in TS feels wrong
-}
-
-// Option 2: Map manually (tedious)
-function toApi(model: Model): ApiModel {
-  return { display_name: model.displayName };
-}
-
-// Option 3: Use a library like class-transformer (dependency)
-class Model {
-  @Expose({ name: 'display_name' })
-  displayName: string;
-}
-```
-
-Go's struct tags handle this natively with no libraries, no mapping functions, and no compromises on naming conventions.
-:::
-
-::: info Why this matters for BFF work
-Struct tags are the foundation of every BFF model. When your BFF receives a JSON request, the struct tags tell Go how to parse the incoming JSON fields into Go struct fields. When your BFF sends a JSON response, the tags tell Go how to format the field names. You'll use `json:"field_name"` on virtually every struct field in your BFF code.
-:::
+This is just a preview. Struct tags are so important for BFF work that they get [their own dedicated chapter](./json) covering `omitempty`, `json:"-"`, pointer fields for optional values, and the complete handler pattern. For now, just know that the backtick part after the type controls JSON serialization.
 
 <div class="checkpoint">
 
 #### Checkpoint
 
-Struct tags (backtick annotations after the field type) control JSON serialization. `json:"name"` sets the JSON key, `omitempty` skips zero-value fields, and `json:"-"` hides fields entirely. This is one of Go's biggest advantages for API work.
+Struct tags (backtick annotations after the field type) control JSON field naming. You'll see them on virtually every struct in BFF code. We'll cover them in depth in [the JSON chapter](./json).
 
 </div>
 
@@ -502,29 +436,60 @@ type User struct {
 }
 ```
 
-With embedding, you can access the nested fields directly:
+Let's be upfront: embedding has **inconsistent behavior** across different contexts, and it will feel confusing at first. Here's the full picture in one table so you can see the pattern:
+
+| Context | How it works | Example |
+|---|---|---|
+| **Defining the struct** | Write just the type name, no field name | `Address` (not `Address Address`) |
+| **Initializing** | Must use the wrapper — fields are NOT flattened | `Address: Address{Street: "123 Main St"}` |
+| **Reading fields** | Fields ARE flattened — access directly | `user.City` (shortcut for `user.Address.City`) |
+| **JSON output** | Fields ARE flattened — no wrapper key | `{"name":"Alice","street":"123 Main St","city":"Portland"}` |
+
+Yeah, it's inconsistent. Initialization uses the wrapper, but reading and JSON don't. That's just how Go works. Let's see each one:
+
+**Initialization — you must use the `Address{}` wrapper:**
 
 ```go
 user := User{                      // Create a User with an embedded Address
     Name: "Alice",                 // Set the name directly on User
-    Address: Address{              // Still need to use Address{} to initialize it
+    Address: Address{              // You MUST use Address{} here -- can't flatten it
         Street: "123 Main St",    // Set the embedded street
         City:   "Portland",       // Set the embedded city
     },
 }
 
-// Both of these work:
-fmt.Println(user.City)             // "Portland" -- field promoted from Address!
-                                   // You can access it as if it were a direct field of User
-
-fmt.Println(user.Address.City)     // "Portland" -- you can also access it through Address explicitly
-                                   // Both paths reach the same value
+// ❌ This does NOT compile -- you can't skip the wrapper:
+// user := User{
+//     Name:   "Alice",
+//     Street: "123 Main St",     // COMPILE ERROR: unknown field 'Street' in User
+//     City:   "Portland",        // COMPILE ERROR: unknown field 'City' in User
+// }
 ```
 
-What just happened? By writing `Address` without a field name in the `User` struct, we "embedded" it. This promotes all of `Address`'s fields into `User`, so you can access `user.City` directly instead of `user.Address.City`. Both paths work.
+**Reading fields — flattened, both paths work:**
+
+```go
+fmt.Println(user.City)             // "Portland" -- shortcut! Access directly
+fmt.Println(user.Address.City)     // "Portland" -- explicit path also works
+```
+
+**JSON output — flattened, no `"address"` wrapper:**
+
+```go
+data, _ := json.Marshal(user)     // Convert to JSON
+fmt.Println(string(data))
+// Output: {"name":"Alice","street":"123 Main St","city":"Portland"}
+//
+// The fields are flattened -- no "address" key wrapping them.
+// Compare to a NAMED field (Address Address `json:"address"`),
+// which WOULD produce nested JSON:
+// {"name":"Alice","address":{"street":"123 Main St","city":"Portland"}}
+```
+
+The mental model: embedding makes the inner struct's fields **feel like** they belong to the outer struct — for reading and serialization. But Go still knows `Address` is a separate struct internally, which is why initialization requires the wrapper.
 
 ::: info When you'll see this in BFF code
-Embedding is used sparingly in BFF code. The most common pattern is embedding an error response struct inside an HTTP error struct, so the JSON fields get promoted to the top level. You'll see this pattern in the example at the end of this chapter.
+Embedding is used sparingly in BFF code. The most common pattern is embedding an error response struct inside an HTTP error struct, so the error fields get promoted to the top level in the JSON response. You'll see this pattern in the example at the end of this chapter.
 :::
 
 <div class="checkpoint">

@@ -157,6 +157,17 @@ fmt.Println(string(data))                        // {"id":"user-123","name":"Ali
 
 **What just happened?** The `json:"-"` tag is your security safety net. Even if a developer accidentally passes a full `User` struct to a response writer, the password and token will never appear in the JSON output. This is critical for BFF work where your handlers sit between the frontend and sensitive backend data.
 
+::: info Why not just use a lowercase field name?
+You might wonder: if `Password` should be hidden from JSON, why not just make it lowercase (`password`) so it's private? That would also hide it from JSON (unexported fields are always excluded).
+
+The difference is **who needs access**:
+
+- **Lowercase `password`** — hidden from JSON AND hidden from other files. Only code in the exact same `.go` file's package can access it. Use this when the field is truly internal to one package.
+- **Uppercase `Password` with `json:"-"`** — hidden from JSON BUT accessible from other packages. Use this when other packages need to read or set the field in Go code, but it should never appear in API responses.
+
+In BFF code, you'll see `json:"-"` when a struct is shared across packages (e.g., a `RequestIdentity` that handlers need to read but should never be serialized to JSON). You'll see lowercase fields when the struct is entirely internal to one package (like the `App` struct's `config` and `logger` fields).
+:::
+
 ### Pointer fields for optional values: `*string`
 
 This is a crucial pattern for PATCH/update endpoints. The problem: in JSON, there are three states for a field:

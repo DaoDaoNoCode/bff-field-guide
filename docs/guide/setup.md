@@ -153,18 +153,40 @@ You _can_ write Go in any text editor, but VS Code with the Go extension gives y
 3. Search for **"Go"** -- look for the one by the Go team at Google (publisher ID: `golang.go`)
 4. Click **Install**
 
-After installing, open any `.go` file (we'll create one in a minute). VS Code will show a notification in the bottom-right corner asking you to install additional Go tools. **Click "Install All."** This installs `gopls` (the Go language server), `dlv` (the debugger), and a few other utilities that power IntelliSense.
+After installing, the extension automatically installs `gopls` (the Go language server) behind the scenes. You may see a brief progress notification in the bottom-right corner — just let it finish. Once it's done, you get autocomplete, error highlighting, auto-imports, and go-to-definition for free.
 
-::: warning "Install All" is important
-If you skip this step or dismiss the notification, you'll miss out on autocomplete, error highlighting, and auto-imports. If the notification doesn't appear, you can trigger it manually: press `Cmd+Shift+P` (or `Ctrl+Shift+P`), type "Go: Install/Update Tools", and select all the tools in the list.
+::: tip Verify the tools are installed
+Open the command palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Linux), type **"Go: Install/Update Tools"**, and hit Enter. You'll see a list of Go tools with checkboxes. Select all of them, click OK, and let them install. This ensures you have the debugger (`dlv`), linter tools, and everything else the extension can use.
+
+If autocomplete or error highlighting isn't working after installing the extension, this command is always your first troubleshooting step.
 :::
 
 ### Recommended Settings
 
-Open your VS Code settings as JSON (`Cmd+Shift+P` > "Preferences: Open User Settings (JSON)") and add these Go-specific settings:
+Here's how to add Go-specific settings to VS Code:
+
+1. Open the command palette: `Cmd+Shift+P` (macOS) or `Ctrl+Shift+P` (Linux)
+2. Type **"Preferences: Open User Settings (JSON)"** and select it
+3. This opens a JSON file called `settings.json`. You'll see a `{` at the top and `}` at the bottom — everything goes between those braces.
+4. If the file already has settings in it (it probably does), add the Go settings below **inside** the existing `{ }`, separated by commas. Don't replace what's already there.
+
+For example, if your `settings.json` currently looks like this:
 
 ```json
 {
+  "editor.fontSize": 14,
+  "workbench.colorTheme": "One Dark Pro"
+}
+```
+
+Add the Go settings after the last existing line (before the closing `}`), with a comma after the previous entry:
+
+```json
+{
+  "editor.fontSize": 14,
+  "workbench.colorTheme": "One Dark Pro",
+
+  // --- Go settings (add everything below this line) ---
   "[go]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "golang.go",
@@ -179,6 +201,10 @@ Open your VS Code settings as JSON (`Cmd+Shift+P` > "Preferences: Open User Sett
 }
 ```
 
+::: warning Don't create a second pair of braces
+A common mistake is pasting the Go settings as a standalone `{ ... }` block, which creates invalid JSON. The Go settings should be **merged into** your existing `settings.json`, not added as a separate object.
+:::
+
 Here's what each setting does, mapped to the TypeScript tools you already know:
 
 | Setting | What It Does | TypeScript Equivalent |
@@ -192,41 +218,87 @@ Here's what each setting does, mapped to the TypeScript tools you already know:
 In Go, `gofmt` is _the_ code formatter. There's only one. It has no configuration options. No tabs vs. spaces debates (Go uses tabs). No print width settings. No `.prettierrc` file. The first time you save a Go file and watch it auto-format, you'll either love it or hate it for about five minutes. Then you'll love it, because you'll never have a formatting argument on a PR again.
 :::
 
-### Verifying VS Code is Working
+### Working with Go in the ODH Dashboard Monorepo
 
-Let's make sure everything is connected properly. Create a temporary file:
+Here's a gotcha that will bite you immediately: **`gopls` (the Go language server) needs a `go.mod` file to work.** Each BFF has its own `go.mod` inside `packages/<name>/bff/`. If you open the `odh-dashboard` root in VS Code and then navigate to a `.go` file, `gopls` can't find the module — so hover, autocomplete, and go-to-definition won't work.
 
-1. Open VS Code
-2. Create a new file and save it as `test.go` anywhere on your machine
-3. Type this:
+You have three options:
 
-```go
-package main
+**Option A: Open the BFF folder directly (simplest)**
 
-import "fmt"
+```
+File > Open Folder → pick packages/mlflow/bff/
+```
 
-func main() {
-    fmt.Println("hello")
+This is the easiest way to get started. `gopls` finds `go.mod` in the root and everything just works. The downside: you can't see the frontend code in the same window.
+
+**Option B: Multi-root workspace (recommended for daily work)**
+
+This lets you keep the dashboard AND BFF code in one VS Code window:
+
+1. Open `odh-dashboard` as usual (`File > Open Folder`)
+2. Go to `File > Add Folder to Workspace...`
+3. Navigate to `packages/mlflow/bff/` (or whichever BFF you're working on) and click **Add**
+4. VS Code now shows both folders in the sidebar — and `gopls` sees the `go.mod` in the BFF folder
+
+You can add multiple BFF folders this way. To save this setup for next time:
+- `File > Save Workspace As...` → save as `odh-dashboard.code-workspace`
+- Next time, open that `.code-workspace` file instead of the folder
+
+**Option C: Configure gopls directory filters (advanced)**
+
+If you prefer a single folder workspace, add this to your `settings.json`:
+
+```json
+"gopls": {
+  "build.directoryFilters": [
+    "-",
+    "+packages/mlflow/bff",
+    "+packages/gen-ai/bff",
+    "+packages/automl/bff",
+    "+packages/maas/bff",
+    "+packages/autorag/bff",
+    "+packages/eval-hub/bff"
+  ]
 }
 ```
 
-**What you should see:**
-- Syntax highlighting (keywords in one color, strings in another, function names in a third)
-- If you hover over `fmt.Println`, a tooltip should appear showing the function signature and documentation
-- If you delete the `import "fmt"` line and save, VS Code should add it back automatically (that's the `organizeImports` setting)
-- If you type `fmt.` you should see autocomplete suggestions like `Println`, `Printf`, `Sprintf`, etc.
+This tells `gopls` to ignore everything except the BFF directories. It works but can be slow on first load since `gopls` indexes multiple modules.
 
-If all of that works, your editor is properly configured. Delete the test file -- we're about to create a real project.
+::: tip Start with Option A
+While you're learning, just open the BFF folder directly. Once you're comfortable and find yourself switching between frontend and BFF code frequently, switch to Option B.
+:::
 
-::: danger If autocomplete doesn't work
-The most common cause is that `gopls` didn't install properly. Try this:
-1. Press `Cmd+Shift+P` (or `Ctrl+Shift+P`)
-2. Type "Go: Install/Update Tools"
-3. Check **all** the tools in the list
-4. Click OK and wait for them to install
-5. Restart VS Code
+### Verifying VS Code is Working
 
-If it still doesn't work, check the Output panel (`Cmd+Shift+U`) and select "Go" from the dropdown to see error messages from the language server.
+Let's make sure everything is connected properly. Open a BFF folder in VS Code (use Option A from above):
+
+```bash
+# Open the mlflow BFF in VS Code
+code packages/mlflow/bff/
+```
+
+Then open any `.go` file (try `internal/api/app.go`) and check:
+
+- **Syntax highlighting** — keywords in one color, strings in another, function names in a third
+- **Hover** — hover over any function like `fmt.Println` and a tooltip should show the function signature and documentation
+- **Autocomplete** — type `fmt.` and you should see suggestions like `Println`, `Printf`, `Sprintf`
+- **Auto-import** — delete an `import` line and save — VS Code should add it back automatically (that's the `organizeImports` setting)
+- **Go-to-definition** — `Cmd+Click` (or `Ctrl+Click`) on a function name to jump to its source
+
+If all of that works, your editor is properly configured.
+
+::: danger If autocomplete or hover doesn't work
+**Check `gopls` is running:** look at the bottom-right of VS Code. You should see "Go" in the status bar. If it shows a spinner or "loading", wait for it to finish.
+
+**Restart the language server:** press `Cmd+Shift+P` → type **"Go: Restart Language Server"** → hit Enter.
+
+**Reinstall tools:** press `Cmd+Shift+P` → type **"Go: Install/Update Tools"** → check all tools → click OK → restart VS Code.
+
+**Check the Output panel:** `View > Output`, select **"Go"** from the dropdown. Any errors from `gopls` will show here.
+
+**Most common cause:** you opened a `.go` file from the monorepo root without adding the BFF folder to your workspace. See "Working with Go in the ODH Dashboard Monorepo" above.
+:::
 :::
 
 ### Useful VS Code Shortcuts for Go
@@ -507,13 +579,17 @@ It reads differently, but the information is the same: function name, parameter 
 
 Now let's build something real. This is where it starts to feel like BFF code. We'll create an HTTP server with a JSON endpoint -- the exact same pattern every BFF handler uses.
 
-Replace the contents of `main.go` with the following. I'll build it up in sections:
+I'll walk you through the code in sections first so you understand every line, then give you the complete file to paste at the end.
 
-**First, the package declaration and imports:**
+::: warning Don't paste section by section
+If you paste each section below into `main.go` one at a time and save, VS Code will auto-remove the imports because they're "unused" until the full code is in place. **Read through the sections to understand them, then paste the complete file at the end of this section all at once.**
+:::
+
+Let's start by understanding the pieces:
+
+**The imports:**
 
 ```go
-package main                  // This is a runnable program
-
 import (                      // Import block for multiple packages
     "encoding/json"           // JSON encoding and decoding (like JSON.stringify/parse)
     "fmt"                     // Formatted I/O (like console.log)
@@ -838,15 +914,81 @@ If you search for Go tutorials online, you might encounter references to `GOPATH
 
 Go modules work like this, and the parallel to npm is almost exact:
 
-1. **`go mod init <module-name>`** creates a `go.mod` file. This is your `package.json`.
-2. **You `import` packages** in your code. When you build, Go reads the imports and resolves them.
-3. **`go mod tidy`** downloads any new dependencies to the global cache (`~/go/pkg/mod/`) and updates `go.mod`.
-4. **`go.sum`** records checksums of every dependency. This is your `package-lock.json` -- it ensures reproducible builds.
+**Step 1: `go mod init` — creates the module (like `npm init`)**
 
-That's the entire system. Your project directory contains your code, `go.mod`, and `go.sum`. Clean, simple, and no `node_modules` folder taking up 500MB of disk space.
+```bash
+go mod init hello-go       # Creates go.mod in the current directory
+```
+
+This creates a `go.mod` file with just two lines:
+
+```
+module hello-go            // The module name (like "name" in package.json)
+go 1.24.3                  // The minimum Go version required
+```
+
+At this point there's no `go.sum` file yet — it doesn't exist until you add a dependency.
+
+**Step 2: You import an external package in your code**
+
+Let's say you add this import to your Go code:
+
+```go
+import "github.com/julienschmidt/httprouter"   // An external HTTP router
+```
+
+This is like adding `import express from 'express'` in TypeScript — but you haven't installed it yet.
+
+**Step 3: `go mod tidy` — installs dependencies (like `npm install`)**
+
+```bash
+go mod tidy                # Reads your imports, downloads what's needed, updates go.mod
+```
+
+This does three things at once:
+1. Scans your `.go` files for all `import` statements
+2. Downloads any external packages to a global cache at `~/go/pkg/mod/` (not a local `node_modules` — all your Go projects share one cache)
+3. Updates `go.mod` to list the dependency with its version:
+
+```
+module hello-go
+go 1.24.3
+
+require github.com/julienschmidt/httprouter v1.3.0   // Added by go mod tidy
+```
+
+**Step 4: `go.sum` is generated automatically — you never edit it**
+
+After `go mod tidy` runs, you'll notice a new file appeared: `go.sum`. You didn't create it — Go did. It looks like this:
+
+```
+github.com/julienschmidt/httprouter v1.3.0 h1:U0609e9tgbseu3rBINet9P48AI/D3o...
+github.com/julienschmidt/httprouter v1.3.0/go.mod h1:oJoE8dGqBauZ7...
+```
+
+Each line is a package name + version + cryptographic hash of its contents. This is your `package-lock.json` — it ensures that everyone on the team gets the exact same bytes when they download the dependency. If someone tampers with a published package, the hash won't match and Go will refuse to build.
+
+::: tip go.sum rules
+- **Never edit `go.sum` by hand** — Go manages it automatically
+- **Always commit `go.sum` to git** — just like `package-lock.json`
+- If `go.sum` has merge conflicts, delete it and run `go mod tidy` to regenerate it
+:::
+
+**The side-by-side summary:**
+
+| npm | Go | What it does |
+|-----|-----|-------------|
+| `npm init` | `go mod init <name>` | Creates the project manifest |
+| `package.json` | `go.mod` | Lists the module name, Go version, and dependencies |
+| `package-lock.json` | `go.sum` | Locks exact dependency versions with checksums |
+| `npm install` | `go mod tidy` | Installs missing deps, removes unused ones |
+| `node_modules/` | `~/go/pkg/mod/` | Where downloaded packages live (Go uses a global cache — no per-project folder!) |
+| `npm install express` | Just add the `import`, then run `go mod tidy` | Add a dependency |
+
+That's the entire system. Your project directory contains your code, `go.mod`, and `go.sum`. No `node_modules` folder taking up 500MB of disk space.
 
 ::: info Real-World Example
-In the ODH Dashboard, each BFF has its own `go.mod` file. For example, `packages/gen-ai/bff/go.mod` declares the module name and its dependencies -- the Kubernetes client library, `httprouter`, and a few others. When you `cd` into that directory and run `go build ./...`, Go reads `go.mod` to resolve all the imports. If a dependency is missing, it downloads it automatically.
+In the ODH Dashboard, each BFF has its own `go.mod` file. For example, open `packages/gen-ai/bff/go.mod` — you'll see the module name (`github.com/opendatahub-io/gen-ai`), the Go version, and a `require` block listing all its dependencies (the Kubernetes client library, `httprouter`, and others). The `go.sum` file next to it has hundreds of lines — one hash per dependency. When you `cd` into that directory and run `go build ./...`, Go reads `go.mod`, checks the hashes in `go.sum`, and compiles everything.
 :::
 
 ## Project Structure So Far
