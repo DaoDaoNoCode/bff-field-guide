@@ -390,7 +390,20 @@ type UpdateRequest struct {                            // Go equivalent of the T
 }
 ```
 
-Why does this matter? Because a regular `string` in Go can only be `""` — there's no `undefined`. So you can't tell the difference between "the user sent an empty string" and "the user didn't send this field at all." A `*string` gives you three states:
+Why does this matter? Because a regular `string` in Go can only be `""` — there's no `undefined`. So you can't tell the difference between "the user sent an empty string" and "the user didn't send this field at all." A `*string` gives you three states.
+
+One gotcha: Go can't take the address of a string literal directly. You can't write `&"John"` — it's a compile error. You need an intermediate variable:
+
+```go
+// Setting a *string field — you need a variable first
+name := "John"                         // Create a regular string variable
+req := UpdateRequest{
+    Name: &name,                       // &name gives you a *string
+}
+// Name: &"John" would NOT compile — Go can't take the address of a literal
+```
+
+Now you can check whether the field was provided:
 
 ```go
 // Using the optional field
@@ -529,7 +542,11 @@ user := &User{Name: "Alice"}      // Create a User, take its address
                                    // user is *User — a pointer
 
 fmt.Println(user.Name)             // "Alice" — auto-dereference (no * needed!)
-fmt.Println((*user).Name)          // "Alice" — explicit dereference (nobody writes this)
+
+var other *User                    // Declared but not assigned — other is nil
+if other == nil {                  // Always check before using
+    fmt.Println("no user")
+}
 ```
 
 ## The 80/20 Rule
