@@ -453,10 +453,6 @@ type App struct {                           // The app struct holds dependencies
 
 Now the magic: the same `App` code works with both real and mock implementations:
 
-::: tip Why `&` is required here
-The `modelService` field is the `ModelService` interface — not a pointer type. But we still pass `&llamaStackService{...}` (with `&`). Why? Because `ListModels` is defined with a **pointer receiver** (`func (s *llamaStackService) ListModels(...)`). That means only `*llamaStackService` satisfies the interface — a plain `llamaStackService{}` without `&` won't compile. In practice, most service structs use pointer receivers (they hold clients, config, etc.), so you'll almost always see `&` when assigning to an interface field.
-:::
-
 ```go
 // In PRODUCTION — use the real service
 app := &App{                               // Create the app
@@ -478,6 +474,8 @@ app := &App{                               // Create the app for testing
     },
 }
 ```
+
+**Why `&` here?** The `modelService` field is the `ModelService` interface, not a pointer type. But `ListModels` uses a pointer receiver (`func (s *llamaStackService)`), so only `*llamaStackService` satisfies the interface — without `&` it won't compile. Most service structs use pointer receivers, so you'll almost always see `&` when assigning to an interface field.
 
 ::: code-group
 ```ts [TypeScript]
