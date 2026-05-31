@@ -297,12 +297,37 @@ require (
 
 - **No `^` or `~` ranges** — versions are exact
 - **No `devDependencies`** — Go doesn't distinguish between dev and production deps
-- **`go.sum`** acts as the lockfile (like `package-lock.json`), recording cryptographic hashes of each dependency
+
+### `go.sum` — The Lockfile (and Why You Need It)
+
+You might wonder: if `go.mod` already pins exact versions, why do you need a lockfile? Because **a version tag is just a label** — it doesn't guarantee the code behind it is the same code you downloaded yesterday.
+
+`go.sum` records cryptographic hashes of every dependency's content. When Go downloads a dependency, it computes a hash of what it got and compares it against `go.sum`. If they don't match, the build fails:
+
+```text
+# go.sum — each line is a module + version + hash
+github.com/julienschmidt/httprouter v1.3.0 h1:U0609e9tgbseu3rBINet9P48AI/D3oJs4dN7jwJOQ1U=
+github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
+```
+
+This is similar to the `integrity` hashes in `package-lock.json`. The difference is that Go has multiple layers of protection for public modules:
+
+1. **Module proxy** (`proxy.golang.org`) — caches the first version it sees. Once `v1.3.0` is cached, even the author can't replace it by force-pushing a tag
+2. **Checksum database** (`sum.golang.org`) — a public, append-only log of hashes. Go verifies your download against this global record
+3. **`go.sum`** — your local record, the last line of defense if anything slips past the above
+
+For public modules, layers 1 and 2 already make tampering nearly impossible. `go.sum` is the insurance policy on top. If it ever complains in a real project, that's genuinely suspicious — don't just blindly re-generate it.
+
+::: tip What about packages in the same repo?
+`go.sum` only tracks **external dependencies** — things Go fetches from the network. Your own packages (like `internal/utils` or `cmd/server`) are just local folders. Go compiles them directly from source, no downloading or hashing involved. That's why they don't appear in `go.mod`'s `require` block either — they're part of the module itself, not dependencies.
+:::
+
+**You never manually edit `go.sum`.** It's auto-generated. When you add, remove, or update dependencies (via `go mod tidy` or `go get`), `go.sum` updates automatically. Both `go.mod` and `go.sum` get committed to git.
 
 <div class="checkpoint">
 
 #### Checkpoint
-`go.mod` is Go's `package.json`. It declares the module path (the import path), the Go version, and dependencies. Versions are exact — no `^` or `~`. `go.sum` is the lockfile.
+`go.mod` is Go's `package.json`. It declares the module path (the import path), the Go version, and dependencies. Versions are exact — no `^` or `~`. `go.sum` records cryptographic hashes of every external dependency, ensuring the code you download is identical to what was originally published. You never edit `go.sum` by hand — it updates automatically.
 </div>
 
 ## Import Paths — No Relative Imports
