@@ -59,14 +59,41 @@ That is four separate API calls, three different services, RBAC logic, and data 
 
 **What this means for you:** Even if the browser could reach Kubernetes, the API orchestration logic does not belong in React components. You need a server-side layer that does the heavy lifting and returns simple, UI-ready JSON.
 
+### But Wait -- It Is Not Just Kubernetes
+
+The three problems above focus on Kubernetes, but the BFF also sits in front of **third-party services** like MLflow and LlamaStack. These services run inside the cluster on internal URLs that the browser cannot reach, and they have their own authentication requirements, API shapes, and quirks.
+
+Consider what happens when the frontend needs to list prompts from MLflow. Without a BFF, your React code would need to:
+
+1. Know the internal cluster URL of the MLflow tracking server (something like `http://mlflow.my-project.svc.cluster.local:5000`)
+2. Attach a bearer token and a workspace header (`X-MLFLOW-WORKSPACE`) to every request
+3. Handle MLflow's specific API contract, pagination format, and error codes
+4. Deal with TLS certificates for secure in-cluster communication
+
+None of that is possible from the browser. The MLflow server is not exposed to the internet -- it lives on the cluster's internal network. Even if you exposed it, you would be leaking internal infrastructure details and auth tokens to the client.
+
+With the BFF, the frontend just calls:
+
+```typescript
+const response = await fetch('/gen-ai/api/v1/mlflow/prompts');  // Simple, same-origin call
+```
+
+Behind the scenes, the BFF creates a per-request MLflow client with the user's auth token, calls the MLflow tracking server on the internal network, and returns a clean JSON response. The frontend never knows or cares that MLflow exists.
+
+The same pattern applies to every third-party service. LlamaStack, NeMo Guardrails, vector store providers -- each has its own API contract, its own authentication scheme, and its own internal URL. The BFF absorbs all of that complexity. Your React components see one consistent API regardless of how many services are involved behind the scenes.
+
+::: tip The General Principle
+Any time your frontend needs data from a service that (a) lives on an internal network, (b) requires server-side credentials, or (c) has an API shape that does not match what the UI needs -- that is a job for the BFF. Kubernetes is just the most prominent example.
+:::
+
 <div class="checkpoint">
 
 #### Checkpoint
 
-You should now understand the three fundamental reasons the browser cannot talk to Kubernetes:
-1. **Authentication** -- the browser cannot hold cluster credentials safely
-2. **CORS** -- the browser blocks cross-origin requests to the K8s API server
-3. **Complexity** -- multi-service orchestration logic does not belong in React components
+You should now understand the three fundamental reasons the browser cannot talk to Kubernetes and other backend services:
+1. **Authentication** -- the browser cannot hold cluster credentials or service tokens safely
+2. **CORS / Network** -- the browser cannot reach internal cluster services, and cross-origin requests get blocked
+3. **Complexity** -- multi-service orchestration and API translation logic does not belong in React components
 
 </div>
 
