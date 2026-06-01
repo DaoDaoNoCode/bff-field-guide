@@ -49,10 +49,10 @@ You might think: "Can't we just configure CORS on the Kubernetes API server?" Te
 
 Kubernetes APIs return deeply nested JSON with fields your UI does not need. A single "list models" operation in the Gen AI playground might require:
 
-1. Calling the Kubernetes API to find the LlamaStack distribution Custom Resource in the namespace
-2. Extracting the service URL from the distribution's `.status.serviceUrl` field
+1. Calling the Kubernetes API to find the OGXServer Custom Resource in the namespace
+2. Extracting the service URL from the OGXServer's `.status.serviceURL` field
 3. Calling the LlamaStack service at that URL to list available models
-4. Calling the Kubernetes authorization API to run a SubjectAccessReview, checking whether the current user actually has permission to view these models
+4. Calling the Kubernetes authorization API to run an access review (SAR or SSAR), checking whether the current user actually has permission to view these models
 5. Filtering, transforming, and merging all that data into a clean JSON shape the UI can render
 
 That is four separate API calls, three different services, RBAC logic, and data transformation -- all for one page load. Putting all of that in a React component would make it enormous, brittle, and impossible to test. It would also mean your frontend developers need to understand Kubernetes CRD schemas, SubjectAccessReview specs, and LlamaStack API contracts just to display a list of models.
@@ -138,7 +138,7 @@ The BFF handles all the hard parts:
 |---|---|
 | Authenticates with Kubernetes using service account tokens | Browser cannot hold cluster credentials safely |
 | Validates the user's identity from OpenShift auth headers | Token validation requires server-side crypto |
-| Checks RBAC permissions via SubjectAccessReview (SAR) | Permission checks require cluster-level API access |
+| Checks RBAC permissions via access reviews (SAR/SSAR) | Permission checks require cluster-level API access |
 | Calls upstream services (LlamaStack, MLflow, Model Registry) | These services are internal to the cluster network |
 | Shapes and filters API responses for the UI | Reduces payload size and hides internal details |
 | Handles retries, timeouts, and error translation | Keeps the frontend code simple and focused |
@@ -241,26 +241,27 @@ Before we dive deeper in later chapters, let us peek at what a real BFF handler 
 func (app *App) LlamaStackModelsHandler(
     w http.ResponseWriter,           // w is the response writer -- like Express's res object
     r *http.Request,                 // r is the incoming request -- like Express's req object
-    ps httprouter.Params,            // ps holds URL path parameters like :id
+    _ httprouter.Params,             // _ means we don't use URL path parameters for this endpoint
 ) {
-    client := getLlamaStackClient(r.Context()) // get the service client from the request context (set by middleware)
+    ctx := r.Context()
 
-    models, err := client.ListModels(r.Context()) // call the LlamaStack service to list models
-    if err != nil {                                // check if the call failed
-        app.serverErrorResponse(w, r, err)         // if it failed, return a 500 error response
-        return                                     // stop processing -- do not continue to the JSON write
+    models, err := app.repositories.Models.ListModels(ctx) // call the repository layer to list models
+    if err != nil {                                         // check if the call failed
+        app.handleLlamaStackClientError(w, r, err)          // return an appropriate error response
+        return                                              // stop processing
     }
 
-    app.WriteJSON(w, http.StatusOK, models, nil)   // write the models as a JSON response with a 200 status
+    response := ModelsResponse{Data: models}                // wrap in the standard response envelope
+    app.WriteJSON(w, http.StatusOK, response, nil)          // write as JSON with 200 OK status
 }
 ```
 
-**What just happened?** That is a complete BFF handler. It is short because all the hard work -- authentication, permission checking, creating the LlamaStack client -- was already handled by middleware that wraps this handler. The handler itself just calls the service and returns the result.
+**What just happened?** That is a complete BFF handler. It is short because all the hard work -- authentication, permission checking, creating the service client -- was already handled by middleware that wraps this handler. The handler calls the repository layer (which uses the service client from context), wraps the result, and returns JSON.
 
 Compare this to the same operation without a BFF, where your React component would need to:
 
 1. Obtain a Kubernetes auth token (impossible from the browser)
-2. Call the K8s API to find the LlamaStack distribution CRD
+2. Call the K8s API to find the OGXServer CRD
 3. Extract the service URL from the CRD status
 4. Call LlamaStack at that URL with the auth token
 5. Run a SubjectAccessReview to check permissions

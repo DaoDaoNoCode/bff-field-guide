@@ -4,6 +4,10 @@
 
 Every error in the BFF becomes a JSON response your React code can understand. That's the contract. No matter what goes wrong -- bad input, permission denied, server crash -- the frontend always gets the same JSON shape. Let's see how that works.
 
+::: info Error Types Vary in Go, Not in JSON
+The Go struct names for errors differ between BFFs (some use `ErrorEnvelope` wrapping `integrations.HTTPError`, others use `HTTPError` with an `ErrorPayload` field). But the JSON output is always the same: `{ "error": { "code": "...", "message": "..." } }`. Your React code can rely on this shape regardless of which BFF it's talking to.
+:::
+
 ## What Your React Code Sees
 
 Before we look at the Go side, let's start from the consumer's perspective. When something goes wrong, your React code gets a response like this:
@@ -135,13 +139,13 @@ Missing or invalid credentials:
 func (app *App) unauthorizedResponse(              // 401 Unauthorized -- missing/invalid credentials
     w http.ResponseWriter,                         // Response writer
     r *http.Request,                               // Request
-    message string,                                // The message (logged but not always sent)
+    err error,                                     // The auth error
 ) {
     httpError := &integrations.HTTPError{           // Create the error struct
         StatusCode: http.StatusUnauthorized,        // 401
         ErrorResponse: integrations.ErrorResponse{
             Code:    strconv.Itoa(http.StatusUnauthorized), // "401"
-            Message: "Access unauthorized",        // GENERIC message -- don't leak auth details
+            Message: err.Error(),                  // Message from the auth error
         },
     }
     app.errorResponse(w, r, httpError)             // Send it
@@ -152,8 +156,7 @@ func (app *App) unauthorizedResponse(              // 401 Unauthorized -- missin
 
 ```typescript
 // response.status === 401
-// body.error.message === "Access unauthorized"
-// Note: always a generic message, never "your token is expired" or "invalid API key"
+// body.error.message === "missing authorization header" (or similar auth error)
 ```
 
 ### forbiddenResponse -- 403
@@ -523,7 +526,7 @@ This is the most common bug in Go HTTP handlers. The compiler won't catch it -- 
 | Situation | Helper | Status | Message to Client |
 |---|---|---|---|
 | Client sent bad input | `badRequestResponse` | 400 | The actual error (client needs to know) |
-| No credentials / invalid token | `unauthorizedResponse` | 401 | Generic "Access unauthorized" |
+| No credentials / invalid token | `unauthorizedResponse` | 401 | Auth error message (varies by BFF) |
 | Authenticated but not allowed | `forbiddenResponse` | 403 | Specific reason |
 | Resource doesn't exist | `notFoundResponse` | 404 | Generic "not found" |
 | Server-side failure | `serverErrorResponse` | 500 | Generic message (real error logged) |

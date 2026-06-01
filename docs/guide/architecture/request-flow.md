@@ -21,13 +21,14 @@ Here is the full journey we will trace:
        |                      |                     |                      |
   3.   |                      |-- proxy request --->|                      |
        |                      |   GET /api/v1/lsd/  |                      |
-       |                      |   models?ns=my-proj |                      |
+       |                      |   models?namespace= |
+       |                      |   my-proj           |                      |
        |                      |   + auth headers    |                      |
        |                      |                     |                      |
   4.   |                      |                     |-- extract identity ->|
        |                      |                     |   (from headers)     |
        |                      |                     |                      |
-  5.   |                      |                     |-- SAR check -------->|
+  5.   |                      |                     |-- access review ---->|
        |                      |                     |   "can user list     |
        |                      |                     |    in my-proj?"      |
        |                      |                     |<-- allowed ----------|
@@ -95,7 +96,7 @@ What changes:
   Only the host changes (4010 -> 8080). The path stays the same.
 ```
 
-**What just happened?** The dev server is a transparent proxy. It does not modify the request path or body -- it just forwards the request to the backend on `:8080`. In production, this layer does not exist; the browser talks directly to the backend.
+The dev server is a transparent proxy. It does not modify the request path or body -- it just forwards the request to the backend on `:8080`. In production, this layer does not exist; the browser talks directly to the backend.
 
 ## Layer 3: Backend Validates Auth and Proxies to BFF
 
@@ -144,11 +145,11 @@ Forwarded to:      http://gen-ai-bff:8080/api/v1/lsd/models?namespace=my-proj
 
 Headers forwarded:                                                     
   Authorization: Bearer <user's OpenShift token>                       <- raw token for upstream calls
-  kubeflow-userid: user@example.com                                    <- extracted username
-  kubeflow-groups: system:authenticated,my-team                        <- extracted group memberships
+  kubeflow-userid: user@example.com                                    <- extracted username (when using internal auth)
+  kubeflow-groups: system:authenticated,my-team                        <- extracted groups (when using internal auth)
 ```
 
-**What just happened?** The backend validated the user's identity, rewrote the URL path (stripping the `/gen-ai/api` prefix to just `/api`), and forwarded the request to the Go BFF. It also converted the user's login session into explicit headers that the BFF can read.
+Three things happened at the backend layer. It validated the user's identity, rewrote the URL path (stripping the `/gen-ai/api` prefix to just `/api`), and forwarded the request to the Go BFF with auth headers the BFF can read.
 
 ::: warning The Path Rewrite Matters
 The path the browser sees (`/gen-ai/api/v1/models`) is different from the path the BFF receives (`/api/v1/models`). When you write BFF route handlers, register paths starting with `/api/...`, not `/gen-ai/api/...`. This is a common source of confusion for newcomers.
@@ -185,7 +186,7 @@ return app.RecoverPanic(           // outermost: catches panics so the server do
                 router))))         // the actual router with all registered routes
 ```
 
-**What just happened?** The global middleware chain runs in order: `RecoverPanic` -> `EnableTelemetry` -> `EnableCORS` -> `InjectRequestIdentity` -> router. Each middleware wraps the next one. The request flows through them from outermost to innermost.
+The middleware chain runs outermost-first: `RecoverPanic` -> `EnableTelemetry` -> `EnableCORS` -> `InjectRequestIdentity` -> router. Each middleware wraps the next one.
 
 ::: warning RequestIdentity Differs Between BFFs
 The `RequestIdentity` struct differs between BFFs. The automl/maas BFFs store `UserID`, `Groups`, and `Token`. The gen-ai BFF only stores `Token` and `MCPToken`. The example below uses the automl/maas pattern -- check your specific BFF's `internal/integrations/kubernetes/types.go` for the actual fields.
@@ -213,7 +214,7 @@ func (app *App) InjectRequestIdentity(next http.Handler) http.Handler {  // wrap
 }
 ```
 
-**What just happened?** The middleware read the user's identity from HTTP headers (set by the Fastify backend in the previous step), created an `RequestIdentity` struct, and stored it in the request context. Every subsequent middleware and handler can access this identity via `r.Context().Value(identityKey)`.
+The middleware extracted the user's identity from HTTP headers and stored it in the request context. Every subsequent middleware and handler can access this identity via `r.Context().Value(identityKey)`.
 
 ::: info Global vs Per-Route Middleware
 `InjectRequestIdentity` is a **global middleware** that wraps the entire router as an `http.Handler`. It runs on every request. This is different from per-route middleware like `AttachNamespace` and `RequireAccessToService`, which wrap individual `httprouter.Handle` functions and are composed per-endpoint. We will see those next.
@@ -232,7 +233,7 @@ router.GET("/api/v1/lsd/models",            // the URL path this handler respond
                 app.LlamaStackModelsHandler)))) // the actual handler function
 ```
 
-**What just happened?** Read this inside-out. The handler `LlamaStackModelsHandler` is wrapped by three middleware functions. The request flows from outside in:
+Read this inside-out. The handler `LlamaStackModelsHandler` is wrapped by three middleware functions. The request flows from outside in:
 
 ```
 Request arrives at route /api/v1/lsd/models
@@ -247,13 +248,13 @@ AttachNamespace
 RequireAccessToService
   - Gets the namespace from context                    <- reads what AttachNamespace stored
   - Gets the user identity from context                <- reads what InjectRequestIdentity stored
-  - Calls K8s SubjectAccessReview API                  <- "can this user access my-proj?"
+  - Performs K8s access review (SAR/SSAR)               <- "can this user access my-proj?"
   - If denied: returns 403, request stops here         <- fail closed -- deny if unsure
   |
   v
 AttachOGXClient
   - Gets the namespace from context                    <- reads the namespace again
-  - Looks up the LlamaStackDistribution CRD            <- finds the K8s Custom Resource
+  - Looks up the OGXServer CRD                          <- finds the K8s Custom Resource
   - Gets the service URL from the CRD's .status field  <- where is LlamaStack running?
   - Creates an HTTP client pointing to that URL         <- ready to make requests
   - Stores the client in the request context            <- handler can use it
@@ -292,7 +293,7 @@ func (app *App) RequireAccessToService(next httprouter.Handle) httprouter.Handle
 }
 ```
 
-**What just happened?** The middleware asked Kubernetes "does this user have permission to access this specific resource type in the `my-proj` namespace?" using a SelfSubjectAccessReview. If the answer is no, the request is rejected with a 403 and the handler never executes. This is the **fail closed** pattern -- if we cannot verify permission, we deny access.
+**What just happened?** The middleware asked Kubernetes "does this user have permission to access this specific resource type in the `my-proj` namespace?" using an access review (SelfSubjectAccessReview in `user_token` mode, SubjectAccessReview in `internal` mode -- see [Authentication & RBAC](../deep-dive/auth) for the difference). If the answer is no, the request is rejected with a 403 and the handler never executes. This is the **fail closed** pattern -- if we cannot verify permission, we deny access.
 
 **Why not just rely on Kubernetes?** You might think: "The BFF uses the user's token for K8s API calls, so K8s would reject unauthorized requests anyway." That is true for direct K8s API calls. But the BFF also calls **upstream services** (LlamaStack, MLflow, NeMo Guardrails) that do not enforce K8s RBAC. LlamaStack does not know about Kubernetes namespaces or roles -- it just sees a valid token. Without the SAR check, any authenticated user could reach any upstream service in any namespace.
 
@@ -312,27 +313,30 @@ The handler itself is simple:
 
 ```go
 // Simplified from internal/api/lsd_models_handler.go
+// The real handler uses a repository layer and wraps the response in a ModelsResponse envelope,
+// but the pattern is the same: get data, handle errors, write JSON.
 func (app *App) LlamaStackModelsHandler(
     w http.ResponseWriter,           // the response writer -- like Express's res
     r *http.Request,                 // the incoming request -- like Express's req
-    ps httprouter.Params,            // URL path parameters (not used for this endpoint)
+    _ httprouter.Params,             // URL path parameters (not used for this endpoint)
 ) {
-    client := getLlamaStackClient(r.Context()) // get the LlamaStack client from context (set by middleware)
+    ctx := r.Context()
 
-    models, err := client.ListModels(r.Context()) // call LlamaStack to list available models
-    if err != nil {                                // if the LlamaStack call failed
-        app.serverErrorResponse(w, r, err)         // return 500 with an error message
-        return                                     // stop processing
+    models, err := app.repositories.Models.ListModels(ctx) // call the repository to list models
+    if err != nil {                                         // if the call failed
+        app.handleLlamaStackClientError(w, r, err)          // return an appropriate error response
+        return                                              // stop processing
     }
 
-    app.WriteJSON(w, http.StatusOK, models, nil)   // write the models as JSON with 200 OK status
+    response := ModelsResponse{Data: models}                // wrap in the standard response envelope
+    app.WriteJSON(w, http.StatusOK, response, nil)          // write as JSON with 200 OK status
 }
 ```
 
-**What just happened?** The handler is intentionally simple. All the hard work (auth, RBAC, client creation) was done by middleware. The handler just: (1) gets the service client from context, (2) calls the service, (3) returns the result as JSON. This is the pattern you will follow for every handler you write.
+**What just happened?** The handler is intentionally simple. All the hard work (auth, RBAC, client creation) was done by middleware. The handler calls the repository (which uses the service client from context), wraps the result, and returns JSON. This is the pattern you will follow for every handler you write.
 
 ::: info Context Is the Thread
-Notice how each middleware adds something to the request context: the namespace, the identity, the service client. The handler at the end pulls everything it needs from the context. This is Go's pattern for passing data through a middleware chain -- instead of mutating a request object (like Express's `req.locals`), you create a new context with the added value.
+Notice how each middleware adds something to the request context: the namespace, the identity, the service client. The handler (or repository layer) at the end pulls everything it needs from the context. This is Go's pattern for passing data through a middleware chain -- instead of mutating a request object (like Express's `req.locals`), you create a new context with the added value.
 :::
 
 ## Layer 7: BFF Calls Upstream Service
@@ -362,7 +366,7 @@ func (c *HTTPClient) ListModels(ctx context.Context) (*ModelsResponse, error) { 
 }
 ```
 
-**What just happened?** The BFF made an HTTP call to the LlamaStack service. The service URL came from a Kubernetes CRD status field (`OGXServer.Status.ServiceURL`), discovered by the `AttachOGXClient` middleware. The user's token is forwarded as an auth credential, but LlamaStack does not perform K8s RBAC checks -- that was already handled by the BFF's SAR middleware in the previous step.
+**What just happened?** The BFF made an HTTP call to the LlamaStack service. The service URL came from a Kubernetes CRD status field (`OGXServer.Status.ServiceURL`), discovered by the `AttachOGXClient` middleware. The user's token is forwarded as an auth credential, but LlamaStack does not perform K8s RBAC checks -- that was already handled by the BFF's access review middleware in the previous step.
 
 ## Layers 8-9: Response Flows Back
 
@@ -385,7 +389,7 @@ Browser receives:
   {"models": [{"id": "llama-3", "name": "Llama 3", ...}]}   <- same JSON the BFF sent
 ```
 
-**What just happened?** The response went back through the same layers in reverse, but none of them modified it. The JSON the BFF produced is exactly what the browser receives.
+The response flowed back through each layer unchanged. The JSON the BFF produced is exactly what the browser receives.
 
 ## Layer 10: React Updates the UI
 
@@ -405,14 +409,9 @@ The user sees a list of AI models on the page. The entire journey -- from button
 
 You have now traced a complete request through all layers:
 1. **React** called `fetch()` with a relative URL
-2. **Dev server** proxied to the backend (dev only)
-3. **Backend** validated auth, rewrote the path, forwarded to the BFF
-4. **BFF global middleware** extracted the user's identity
-5. **BFF per-route middleware** validated namespace and checked RBAC
-6. **BFF middleware** created the LlamaStack client
-7. **BFF handler** called LlamaStack and returned JSON
-8. **Response** flowed back through all layers unchanged
-9. **React** updated state and re-rendered
+2. **Backend** validated auth, rewrote the path, forwarded to the BFF
+3. **BFF middleware** extracted identity, validated namespace, checked RBAC, and created the service client
+4. **BFF handler** called the upstream service and returned JSON
 
 </div>
 
@@ -441,14 +440,14 @@ Now let us zoom in on how authentication works at each layer. This is one of the
 |  7. Extracts token from cookie or Authorization header       |
 |  8. Validates token against OpenShift API                    |
 |  9. Extracts user identity (username, groups)                |
-| 10. Sets kubeflow-userid and kubeflow-groups headers         |
+| 10. Sets identity headers (kubeflow-userid, kubeflow-groups) |
 | 11. Forwards request + all headers to BFF                    |
 |                                                              |
 +--------------------------------------------------------------+
                               |
                     Authorization: Bearer <token>           <- raw token for upstream calls
-                    kubeflow-userid: user@example.com       <- extracted username
-                    kubeflow-groups: system:authenticated    <- extracted groups
+                    kubeflow-userid: user@example.com       <- extracted username (internal auth)
+                    kubeflow-groups: system:authenticated    <- extracted groups (internal auth)
                               |
                               v
 +-- BFF (Go) --------------------------------------------------+
@@ -466,12 +465,14 @@ Now let us zoom in on how authentication works at each layer. This is one of the
 
 **What just happened?** The user's identity starts as login credentials, becomes an OAuth token, gets validated by the backend, is decomposed into username/groups headers, and finally gets reassembled by the BFF into a `RequestIdentity` struct. The raw token also travels through so the BFF can use it for Kubernetes API calls and upstream service authentication.
 
-::: tip Two Auth Modes
-BFFs support two authentication methods, configured by the `--auth-method` flag:
-- **`internal`** -- reads identity from `kubeflow-userid` and `kubeflow-groups` headers (default for ODH/Kubeflow deployments)
-- **`user_token`** -- reads the raw `Authorization: Bearer` token and validates it directly (for RHOAI deployments)
+::: tip Auth Methods Vary by BFF
+BFFs support up to three authentication methods, configured by the `--auth-method` flag. Not every BFF supports all three:
 
-In local development, you can use `--auth-method=disabled` to skip auth entirely when running with mocked services.
+- **`internal`** -- reads identity from `kubeflow-userid` and `kubeflow-groups` headers (automl, maas, autorag, model-registry)
+- **`user_token`** -- reads the raw `Authorization: Bearer` token (gen-ai, eval-hub, mlflow, and most others)
+- **`disabled`** -- skips auth entirely (automl, autorag, eval-hub, gen-ai -- useful for local dev with mocks)
+
+The default also varies: gen-ai defaults to `user_token`, while automl/autorag default to `internal`. Always check the specific BFF's `cmd/main.go` for the supported methods and default.
 :::
 
 ## The Complete Middleware Chain
@@ -493,7 +494,7 @@ router.GET("/api/v1/lsd/models",                     // URL path pattern
 //       -> LlamaStackModelsHandler
 ```
 
-**What just happened?** Every request passes through global middleware first (panic recovery, telemetry, CORS, identity). Then the router dispatches to the matching route, and the per-route middleware runs (namespace, RBAC, client creation). Finally the handler executes. When you add a new endpoint, you choose which per-route middleware to wrap it with.
+Every request passes through global middleware first, then per-route middleware, then the handler. When you add a new endpoint, you choose which per-route middleware to wrap it with and write the handler function.
 
 ## Error Flow: What Happens When Things Go Wrong
 
@@ -511,15 +512,15 @@ BFF global middleware: InjectRequestIdentity -> OK                 <- identity e
 BFF per-route middleware: AttachNamespace -> OK                    <- namespace parsed from query
   |
 BFF per-route middleware: RequireAccessToService
-  |-- Calls SubjectAccessReview: "can user list in restricted-proj?"
+  |-- Performs access review: "can user list in restricted-proj?"
   |-- K8s returns: DENIED                                          <- user lacks permission
   |
 BFF returns:                                                       <- handler never executes
   HTTP/1.1 403 Forbidden
   {
     "error": {
-      "code": "forbidden",                                         <- machine-readable error code
-      "message": "You do not have access to this namespace"        <- human-readable message
+      "code": "403",                                               <- HTTP status code as string
+      "message": "user does not have permission to access services in this namespace"
     }
   }
   |
@@ -530,13 +531,13 @@ Browser: fetch() resolves with response.status === 403            <- not a netwo
 React: Shows "Access denied" error message to the user            <- UI handles the error
 ```
 
-**What just happened?** The RBAC middleware denied the request before the handler could run. The error followed the standard error envelope format that every BFF uses:
+The RBAC middleware denied the request before the handler could run. The error follows the standard error envelope format:
 
 ```json
 {
   "error": {                             
-    "code": "forbidden",                 // machine-readable code for programmatic handling
-    "message": "You do not have access to this namespace" // human-readable message for UI display
+    "code": "403",                       // HTTP status code as string (not a named code)
+    "message": "user does not have permission to access services in this namespace"
   }
 }
 ```
@@ -599,7 +600,7 @@ func (app *App) CreateMCPServerHandler(
 }
 ```
 
-**What just happened?** The pattern is the same as GET requests: middleware handles auth and permissions, the handler handles business logic. The only differences for POST are: (1) the handler reads and validates a request body, and (2) it returns 201 Created instead of 200 OK.
+The pattern is the same as GET requests: middleware handles auth and permissions, the handler handles business logic. The only differences for POST are: (1) the handler reads and validates a request body, and (2) it returns 201 Created instead of 200 OK.
 
 The response:
 
@@ -617,11 +618,8 @@ The response:
 
 You should now be able to:
 1. Trace any request from React through all layers to the BFF and back
-2. Explain what each middleware does and why it runs in that order
-3. Identify where auth headers come from and how they flow
-4. Describe the error envelope format and how errors propagate
-5. Understand the difference between global and per-route middleware
-6. Recognize the pattern for both GET (read) and POST (write) handlers
+2. Identify the middleware execution order (global first, then per-route)
+3. Recognize the pattern for both GET and POST handlers
 
 </div>
 
@@ -635,7 +633,7 @@ Every API request in the ODH Dashboard follows this lifecycle:
 | 2 | **Dev Server** | Proxies to backend (dev only) |
 | 3 | **Backend** | Validates OAuth token, rewrites path, proxies to BFF |
 | 4 | **BFF Global Middleware** | Extracts user identity from headers |
-| 5 | **BFF Per-Route Middleware** | Validates namespace, checks RBAC via SAR |
+| 5 | **BFF Per-Route Middleware** | Validates namespace, checks RBAC via SAR/SSAR |
 | 6 | **BFF Per-Route Middleware** | Creates service client, attaches to context |
 | 7 | **BFF Handler** | Calls upstream service, shapes response |
 | 8 | **BFF** | Returns JSON response |

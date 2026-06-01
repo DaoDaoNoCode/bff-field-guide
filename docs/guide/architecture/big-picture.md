@@ -303,9 +303,9 @@ This is where your Go code lives. Each BFF is a standalone Go HTTP server that h
 
 When a request arrives at the BFF, it goes through a middleware chain:
 
-1. **Identity extraction** -- reads the user's ID and groups from headers (`kubeflow-userid`, `kubeflow-groups`) or the `Authorization` bearer token
-2. **Namespace validation** -- extracts and validates the namespace from query params or URL path
-3. **Access check** -- performs a SubjectAccessReview against the Kubernetes API to verify the user has permission in that namespace
+1. **Identity extraction** -- reads the user's identity from HTTP headers. The exact headers depend on the auth method: `kubeflow-userid`/`kubeflow-groups` (internal auth) or `Authorization: Bearer` token (user_token auth)
+2. **Namespace validation** -- extracts and validates the namespace from query params
+3. **Access check** -- performs an access review (SAR or SSAR) against the Kubernetes API to verify the user has permission in that namespace
 4. **Client attachment** -- creates the appropriate service client (LlamaStack, Model Registry, etc.) and attaches it to the request context
 5. **Handler execution** -- your actual endpoint logic runs, calls the service, shapes the response, and returns JSON
 
@@ -317,7 +317,7 @@ Understanding the middleware chain is the single most important thing for workin
 
 The BFF talks to the actual services that hold the data:
 
-- **Kubernetes API Server** -- for creating, reading, updating, and deleting Kubernetes resources (CRDs like LlamaStackDistributions, InferenceServices, etc.) and for RBAC checks via SubjectAccessReview
+- **Kubernetes API Server** -- for creating, reading, updating, and deleting Kubernetes resources (CRDs like OGXServers, InferenceServices, etc.) and for RBAC checks via access reviews (SAR/SSAR)
 - **LlamaStack** -- AI model serving, inference, tool use, and vector stores
 - **MLflow** -- experiment tracking and prompt management
 - **Model Registry** -- kubeflow's model catalog service
@@ -392,7 +392,7 @@ Step 3: Backend proxy (module-federation.ts) processes it:
   1. Matches /gen-ai/api from the registered proxy config
   2. Rewrites /gen-ai/api -> /api (strips the package prefix)
   3. Forwards to BFF service: GET http://bff:8080/api/v1/models?namespace=X
-  4. Passes through auth headers (Authorization, kubeflow-userid, kubeflow-groups)
+  4. Passes through auth headers (Authorization, and depending on auth mode: kubeflow-userid, kubeflow-groups)
 
 Step 4 (separate path, not API): Static asset requests go through /_mf/:
   GET /_mf/genAi/remoteEntry.js

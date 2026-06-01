@@ -92,7 +92,8 @@ Now let's add a few more flags:
 ```go
     flag.StringVar(&cfg.AuthMethod,                // Same pattern, but for a string flag
         "auth-method",                             // The flag name: --auth-method
-        getEnvAsString("AUTH_METHOD", "user_token"),// Default: check AUTH_METHOD env var, fall back to "user_token"
+        getEnvAsString("AUTH_METHOD", "user_token"),// Default varies by BFF: "user_token" (gen-ai, eval-hub)
+                                                   // or "internal" (automl, maas, autorag)
         "Authentication method")                   // Help text
 
     flag.BoolVar(&cfg.MockK8sClient,               // Boolean flag: --mock-k8s-client

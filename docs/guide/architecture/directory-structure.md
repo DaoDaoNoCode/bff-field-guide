@@ -238,19 +238,19 @@ func (app *App) Routes() http.Handler {              // returns the complete HTT
 Each feature area gets its own handler file. This keeps the code organized:
 
 ```go
-// lsd_models_handler.go -- handles model-related endpoints
+// lsd_models_handler.go -- handles model-related endpoints (simplified)
 func (app *App) LlamaStackModelsHandler(             // method on App -- has access to all dependencies
     w http.ResponseWriter,                            // response writer (like Express res)
     r *http.Request,                                  // request object (like Express req)
-    ps httprouter.Params,                             // URL path parameters (like req.params)
+    _ httprouter.Params,                              // URL path parameters (not used here)
 ) {
-    client := getLlamaStackClient(r.Context())        // get service client from context
-    models, err := client.ListModels(r.Context())     // call the upstream service
+    models, err := app.repositories.Models.ListModels(r.Context()) // call repository layer
     if err != nil {                                   // if the call failed
-        app.serverErrorResponse(w, r, err)            // return 500 with error details
+        app.handleLlamaStackClientError(w, r, err)    // return appropriate error
         return                                        // stop processing
     }
-    app.WriteJSON(w, http.StatusOK, models, nil)      // return 200 with JSON response
+    response := ModelsResponse{Data: models}          // wrap in response envelope
+    app.WriteJSON(w, http.StatusOK, response, nil)    // return 200 with JSON response
 }
 ```
 
@@ -263,25 +263,7 @@ Contains all middleware functions:
 
 ### `errors.go` -- Standardized Error Responses
 
-```go
-func (app *App) badRequestResponse(                   // handles 400 errors
-    w http.ResponseWriter,                             // response writer
-    r *http.Request,                                   // request (for logging context)
-    err error,                                         // the actual error
-) {
-    app.WriteJSON(w, http.StatusBadRequest, ErrorEnvelope{  // write error as JSON
-        Error: &HTTPError{                             // standard error envelope
-            StatusCode: 400,                           // HTTP status code
-            ErrorResponse: ErrorResponse{              // error details
-                Code:    "bad_request",                // machine-readable code
-                Message: err.Error(),                  // human-readable message
-            },
-        },
-    }, nil)
-}
-```
-
-**What just happened?** Every BFF uses the same error envelope format. This is like having a shared error handler in Express that always returns `{ error: { code, message } }`.
+Contains helper functions (`badRequestResponse`, `forbiddenResponse`, `serverErrorResponse`, etc.) that produce consistent JSON error responses: `{ "error": { "code": "400", "message": "..." } }`. Every BFF uses this same JSON shape, like a shared error handler in Express. See [Error Handling](../deep-dive/error-handling) for the full struct definitions and helper function reference.
 
 <div class="checkpoint">
 
@@ -304,7 +286,7 @@ You now understand `internal/api/`:
 ```go
 type EnvConfig struct {                               // all configuration in one struct
     Port               int                            // server listen port (--port flag)
-    AuthMethod         string                         // "internal", "user_token", or "disabled"
+    AuthMethod         string                         // auth method (varies by BFF -- see Auth chapter)
     AllowedOrigins     string                         // CORS allowed origins
     MockK8sClient      bool                           // use mock K8s client (--mock-k8s-client)
     MockLSClient       bool                           // use mock LlamaStack client
@@ -333,9 +315,11 @@ const (                                               // const block -- like exp
     HealthcheckPath    = "/healthcheck"                // path for health checks
 
     AuthorizationHeader = "Authorization"              // standard HTTP auth header
-    UserIDHeader        = "kubeflow-userid"            // header for username (set by backend)
-    GroupsHeader        = "kubeflow-groups"            // header for groups (set by backend)
 )
+
+// Some BFFs (automl, maas) also define constants for kubeflow identity headers:
+//   UserIDHeader = "kubeflow-userid"    // header for username (internal auth mode)
+//   GroupsHeader = "kubeflow-groups"    // header for groups (internal auth mode)
 ```
 
 ## `internal/integrations/` -- External Service Clients
@@ -362,9 +346,13 @@ This directory is where the BFF earns its name. Each subdirectory talks to a dif
 ```go
 // kubernetes/client.go -- interface + implementation
 type KubernetesClientInterface interface {            // interface defines what the client can do
-    CanListOGXServers(identity, ns string) (bool, error) // RBAC check for a specific resource type
-    GetLlamaStackDistribution(ns string) (*LSD, error) // find LlamaStack CRD in namespace
-    CreateResource(ns string, resource interface{}) error // create a K8s resource
+    CanListOGXServers(ctx context.Context,            // RBAC check for a specific resource type
+        identity *RequestIdentity, namespace string,  // uses context, typed identity, and namespace
+    ) (bool, error)
+    GetOGXServers(ctx context.Context,                // find OGXServer CRDs in namespace
+        identity *RequestIdentity, namespace string,
+    ) (*OGXServerList, error)
+    // ... more methods per BFF
 }
 ```
 
@@ -554,17 +542,12 @@ build:                                    # compile to a binary
 
 #### Checkpoint
 
-You have now seen every directory in a BFF. Here is the quick mental map:
-- `cmd/` = entry point (index.ts)
-- `internal/api/` = HTTP handlers and middleware (routes/)
-- `internal/config/` = configuration (env.ts)
-- `internal/constants/` = string constants (constants.ts)
-- `internal/integrations/` = service clients (api/ or services/)
-- `internal/models/` = data types (types.ts)
-- `internal/repositories/` = business logic (hooks/)
-- `openapi/` = API specification
-- `go.mod` = package.json
-- `Makefile` = npm scripts
+You have now seen every directory in a BFF. The five to remember:
+- `cmd/` = entry point (`index.ts`)
+- `internal/api/` = HTTP handlers and middleware (`routes/`)
+- `internal/integrations/` = service clients with co-located mocks (`api/services/`)
+- `internal/models/` = data types (`types.ts`)
+- `go.mod` = `package.json`
 
 </div>
 

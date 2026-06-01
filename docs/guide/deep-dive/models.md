@@ -183,40 +183,14 @@ function createNamespaceModel(                     // Same factory pattern
 
 ## The Error Structs
 
-Every BFF uses a standard error shape. These structs deserve special attention because they use **embedding** -- a Go feature that acts like inheritance:
+Every BFF uses a standard error shape built from three Go structs: `ErrorResponse` (the JSON fields `code` and `message`), `HTTPError` (adds the HTTP status code, uses Go's embedding to "inherit" `ErrorResponse`), and an envelope struct (wraps everything under an `"error"` key). The exact struct names vary between BFFs, but the JSON output is always the same.
 
-```go
-// internal/integrations/http.go -- shared across all BFFs
+`HTTPError` uses two important model patterns worth highlighting:
 
-type ErrorResponse struct {                        // The core error fields
-    Code    string `json:"code"`                   // HTTP status code as string (e.g., "400")
-    Message string `json:"message"`                // Human-readable error message
-}
+- `` `json:"-"` `` on `StatusCode` -- the field drives the HTTP response status code but is excluded from the JSON body
+- **Embedding** -- `ErrorResponse` is embedded in `HTTPError` (no field name), so `Code` and `Message` are "promoted" and accessible directly as `err.Code` and `err.Message`
 
-type HTTPError struct {                            // Extends ErrorResponse
-    StatusCode int `json:"-"`                      // HTTP status code as int -- NOT in JSON output
-    ErrorResponse                                  // Embedded -- Code and Message are "promoted"
-}
-
-func (e *HTTPError) Error() string {               // Implements the error interface
-    return fmt.Sprintf("HTTP %d: %s - %s",        // Format: "HTTP 400: 400 - missing namespace"
-        e.StatusCode, e.Code, e.Message)
-}
-```
-
-**What just happened?** Two things to notice:
-
-1. `StatusCode` has `` `json:"-"` `` -- it's used internally to set the HTTP status code but never appears in the JSON body.
-
-2. `ErrorResponse` is **embedded** in `HTTPError` (no field name). This means `HTTPError` "inherits" the `Code` and `Message` fields directly. You can access `err.Code` and `err.Message` on an `HTTPError` -- they're promoted from the embedded struct.
-
-And the error envelope in `internal/api/errors.go`:
-
-```go
-type ErrorEnvelope struct {                        // The outer wrapper for error responses
-    Error *integrations.HTTPError `json:"error"`   // Wraps the HTTPError in an "error" key
-}
-```
+For the full struct definitions and all error helper functions, see [Error Handling](./error-handling#the-error-envelope----three-structs-working-together).
 
 An error response looks like:
 

@@ -26,7 +26,13 @@ BFFs support up to three authentication methods, controlled by the `--auth-metho
 | **Disabled** | `disabled` | Bypasses auth (behavior varies by BFF) | Local development / testing |
 
 ::: warning Not All BFFs Support All Auth Methods
-Not all BFFs support all three auth methods. For example, gen-ai currently supports only `user_token` and `disabled` (not `internal`). The maas BFF supports `internal` and `user_token` (not `disabled`). The automl BFF supports all three. Always check the specific BFF's `main.go` for supported auth methods.
+Not all BFFs support all three auth methods:
+- **gen-ai, eval-hub**: `user_token` and `disabled` only (no `internal`)
+- **maas**: `internal` and `user_token` only (no `disabled`)
+- **automl, autorag**: all three (`internal`, `user_token`, `disabled`)
+- **mlflow, model-registry**: check each BFF's `cmd/main.go` for the current list
+
+The default also varies: gen-ai defaults to `user_token`, while automl/maas/autorag default to `internal`. Always check the specific BFF's `main.go`.
 :::
 
 ### Internal Auth (Kubeflow Headers)

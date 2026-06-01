@@ -300,12 +300,8 @@ func (app *App) AttachNamespace(                   // Route-level middleware
             return                                 // Stop the chain
         }
 
-        // Validate against DNS-1123 label rules
-        if !isValidDNS1123Label(namespace) {       // K8s namespaces must be valid DNS labels
-            app.badRequestResponse(w, r,           // Send 400 if invalid
-                fmt.Errorf("invalid namespace: must be lowercase alphanumeric or '-', max 63 chars"))
-            return                                 // Stop the chain
-        }
+        // Some BFFs (automl, autorag) also validate against DNS-1123 label rules here.
+        // Others (gen-ai) only check for empty. Check your specific BFF.
 
         ctx := context.WithValue(                  // Store namespace in context
             r.Context(),                           // Start from existing context
@@ -319,13 +315,13 @@ func (app *App) AttachNamespace(                   // Route-level middleware
 }
 ```
 
-**What just happened?** Namespaces are validated against DNS-1123 rules (Kubernetes requirement) before they ever reach a handler. This catches invalid names early, before they cause cryptic K8s API errors.
+**What just happened?** The namespace is extracted from the query string and stored in context. Some BFFs (automl, autorag) also validate against DNS-1123 rules to catch invalid names early. Either way, the handler never has to parse query parameters itself.
 
 **What it adds to context:** `NamespaceQueryParameterKey` (string -- the validated namespace). The exact constant name varies by BFF -- always check `internal/constants/` in the BFF you are working on.
 
 ### 6. RequireAccess -- Can This User Do This? (Route-Level)
 
-Performs a SubjectAccessReview to check if the user has permission:
+Performs an access review (SAR or SSAR, depending on the auth method) to check if the user has permission:
 
 ```go
 func (app *App) RequireAccessToPipelineServers(    // Route-level middleware
