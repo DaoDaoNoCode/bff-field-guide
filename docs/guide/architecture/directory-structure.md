@@ -362,7 +362,7 @@ This directory is where the BFF earns its name. Each subdirectory talks to a dif
 ```go
 // kubernetes/client.go -- interface + implementation
 type KubernetesClientInterface interface {            // interface defines what the client can do
-    CanAccessNamespace(token, ns string) (bool, error) // RBAC permission check
+    CanListOGXServers(identity, ns string) (bool, error) // RBAC check for a specific resource type
     GetLlamaStackDistribution(ns string) (*LSD, error) // find LlamaStack CRD in namespace
     CreateResource(ns string, resource interface{}) error // create a K8s resource
 }

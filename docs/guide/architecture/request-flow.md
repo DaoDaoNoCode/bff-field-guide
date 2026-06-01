@@ -274,8 +274,8 @@ func (app *App) RequireAccessToService(next httprouter.Handle) httprouter.Handle
         namespace := getNamespace(r.Context())      // get the namespace from context (set by AttachNamespace)
         identity := getIdentity(r.Context())        // get the user identity (set by InjectRequestIdentity)
 
-        allowed, err := app.kubeClient.CanAccessNamespace( // ask Kubernetes: can this user access this namespace?
-            identity.Token,                         // use the user's own token for the check
+        allowed, err := app.kubeClient.CanListOGXServers( // ask Kubernetes: can this user access this resource?
+            identity,                               // use the user's own token for the check
             namespace,                              // check against this specific namespace
         )
         if err != nil {                             // if the K8s API call itself failed

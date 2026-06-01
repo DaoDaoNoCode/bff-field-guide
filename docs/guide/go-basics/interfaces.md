@@ -539,7 +539,7 @@ type KubernetesClientInterface interface {  // The behavior contract
         serviceName string,                // Which service
     ) (string, error)                      // Returns the URL or an error
 
-    CanAccess(                             // Check if a user can access a namespace
+    CanAccessService(                      // Check if a user can access a specific service
         ctx context.Context,               // Context
         identity *RequestIdentity,         // Who is the user
         namespace string,                  // What namespace
@@ -547,7 +547,7 @@ type KubernetesClientInterface interface {  // The behavior contract
 }
 ```
 
-Any type with `GetServiceURL` and `CanAccess` methods satisfies this interface. The real implementation calls the Kubernetes API. The mock implementation returns test data. Your handler code works with either:
+Any type with `GetServiceURL` and `CanAccessService` methods satisfies this interface. The real implementation calls the Kubernetes API (using a SubjectAccessReview to check a specific resource type). The mock implementation returns test data. Your handler code works with either:
 
 ```go
 func (app *App) ModelsHandler(             // A handler that lists models
@@ -558,7 +558,7 @@ func (app *App) ModelsHandler(             // A handler that lists models
     namespace := ps.ByName("namespace")    // Get namespace from URL params
 
     // This works with EITHER the real or mock K8s client
-    canAccess, err := app.k8sClient.CanAccess( // Call the interface method
+    canAccess, err := app.k8sClient.CanAccessService( // Call the interface method
         r.Context(),                           // Pass the request context
         getIdentity(r),                        // Get user identity from request
         namespace,                             // The namespace to check
