@@ -236,6 +236,8 @@ After we know *who* the user is, we need to check *what they can do*. This is wh
 
 A SubjectAccessReview is a Kubernetes API call that asks: "Can user X perform action Y on resource Z in namespace N?" The K8s API server checks its RBAC policies and returns `allowed: true` or `allowed: false`.
 
+**Why do we need this if the BFF uses the user's token?** For direct K8s API calls, K8s enforces its own RBAC -- the user's token would be rejected if they lack permission. But the BFF also forwards requests to upstream services like LlamaStack and MLflow. These services accept the user's token for authentication but do not check K8s namespace-level RBAC. The BFF is the enforcement point -- it asks K8s "is this user allowed?" before forwarding the request to an upstream service that cannot answer that question itself.
+
 Here's how the K8s client performs the check:
 
 ```go
@@ -271,6 +273,8 @@ func (client *K8sClient) CanListDSPipelineApplications( // RBAC check method
 ```
 
 **What just happened?** In plain English, this asks: "Can `alice@example.com` (member of `team-alpha`) **list** `datasciencepipelinesapplications` in namespace `my-project`?" The K8s API server checks its RBAC rules and returns yes or no.
+
+Notice that the check is **resource-specific** -- it asks about a particular resource type, not "can this user access the namespace in general." This distinction matters. A user might have permission to access MLflow prompts in a namespace but not pipeline applications. As the dashboard evolves (e.g., shared namespaces where users have narrow, per-resource permissions), the SAR checks for each service path will need to match the specific resources that service uses.
 
 **The frontend equivalent:** On the frontend, you might check `isAdmin` or use a custom hook to determine what to show. But those checks are *informational* -- they control the UI. The BFF's SAR check is *authoritative* -- it blocks the request at the API level.
 

@@ -292,10 +292,12 @@ func (app *App) RequireAccessToService(next httprouter.Handle) httprouter.Handle
 }
 ```
 
-**What just happened?** The middleware asked Kubernetes "does this user have permission to access resources in the `my-proj` namespace?" using a SubjectAccessReview. If the answer is no, the request is rejected with a 403 and the handler never executes. This is the **fail closed** pattern -- if we cannot verify permission, we deny access.
+**What just happened?** The middleware asked Kubernetes "does this user have permission to access this specific resource type in the `my-proj` namespace?" using a SelfSubjectAccessReview. If the answer is no, the request is rejected with a 403 and the handler never executes. This is the **fail closed** pattern -- if we cannot verify permission, we deny access.
+
+**Why not just rely on Kubernetes?** You might think: "The BFF uses the user's token for K8s API calls, so K8s would reject unauthorized requests anyway." That is true for direct K8s API calls. But the BFF also calls **upstream services** (LlamaStack, MLflow, NeMo Guardrails) that do not enforce K8s RBAC. LlamaStack does not know about Kubernetes namespaces or roles -- it just sees a valid token. Without the SAR check, any authenticated user could reach any upstream service in any namespace.
 
 ::: warning RBAC Is Non-Negotiable
-Every endpoint that accesses namespace-scoped resources MUST go through the access check middleware. Skipping this middleware would mean any authenticated user could access any namespace, regardless of their actual Kubernetes permissions.
+Every endpoint that accesses namespace-scoped resources MUST go through the access check middleware. The current implementation checks a specific resource type per service (e.g., "can this user list OGXServers in this namespace?"). This means the check is **resource-scoped, not namespace-scoped** -- a user might have access to one resource type in a namespace but not another. As the dashboard evolves toward shared namespaces (where users can access specific resources without having broad namespace access), these checks will likely become more fine-grained.
 :::
 
 ## Layer 6: BFF Handler Executes Business Logic
@@ -360,7 +362,7 @@ func (c *HTTPClient) ListModels(ctx context.Context) (*ModelsResponse, error) { 
 }
 ```
 
-**What just happened?** The BFF made an HTTP call to the LlamaStack service. The service URL came from a Kubernetes CRD status field (`LlamaStackDistribution.Status.ServiceURL`), discovered by the `AttachOGXClient` middleware. The user's token is forwarded so that LlamaStack can perform its own permission checks.
+**What just happened?** The BFF made an HTTP call to the LlamaStack service. The service URL came from a Kubernetes CRD status field (`OGXServer.Status.ServiceURL`), discovered by the `AttachOGXClient` middleware. The user's token is forwarded as an auth credential, but LlamaStack does not perform K8s RBAC checks -- that was already handled by the BFF's SAR middleware in the previous step.
 
 ## Layers 8-9: Response Flows Back
 
