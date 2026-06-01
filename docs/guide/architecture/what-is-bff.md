@@ -61,39 +61,51 @@ That is four separate API calls, three different services, RBAC logic, and data 
 
 ### But Wait -- It Is Not Just Kubernetes
 
-The three problems above focus on Kubernetes, but the BFF also sits in front of **third-party services** like MLflow and LlamaStack. These services run inside the cluster on internal URLs that the browser cannot reach, and they have their own authentication requirements, API shapes, and quirks.
+The three problems above focus on Kubernetes, but the BFF also sits in front of **third-party services** like MLflow, LlamaStack, and KF Pipelines. These services have their own API contracts, authentication requirements, and quirks.
 
-Consider what happens when the frontend needs to list prompts from MLflow. Without a BFF, your React code would need to:
+Now, some of these services *are* reachable from the browser. If a service like MLflow is exposed through a gateway (like the Data Science Gateway), the browser can technically call it directly -- CORS can be configured, TLS is handled by the gateway, and the user's token is already in the browser (since the UI passes it to the BFF anyway).
 
-1. Know the internal cluster URL of the MLflow tracking server (something like `http://mlflow.my-project.svc.cluster.local:5000`)
-2. Attach a bearer token and a workspace header (`X-MLFLOW-WORKSPACE`) to every request
-3. Handle MLflow's specific API contract, pagination format, and error codes
-4. Deal with TLS certificates for secure in-cluster communication
+So why still use a BFF? Because network reachability is only one of the three problems. Even when a service is exposed, the BFF still provides:
 
-None of that is possible from the browser. The MLflow server is not exposed to the internet -- it lives on the cluster's internal network. Even if you exposed it, you would be leaking internal infrastructure details and auth tokens to the client.
-
-With the BFF, the frontend just calls:
+**A unified API surface.** Without a BFF, your React code talks to multiple services directly -- each with its own URL, its own request format, its own pagination scheme, and its own error codes. Your frontend becomes a patchwork of service-specific API calls:
 
 ```typescript
-const response = await fetch('/gen-ai/api/v1/mlflow/prompts');  // Simple, same-origin call
+// Without a BFF -- the frontend juggles multiple APIs
+const models = await fetch('https://llamastack.gateway.example.com/v1/models',
+  { headers: { 'Authorization': `Bearer ${token}` } });
+
+const prompts = await fetch('https://mlflow.gateway.example.com/ajax-api/2.0/mlflow/registered-prompts/list',
+  { headers: { 'Authorization': `Bearer ${token}`, 'X-MLFLOW-WORKSPACE': namespace } });
+
+// Different URLs, different paths, different headers, different response shapes
 ```
 
-Behind the scenes, the BFF creates a per-request MLflow client with the user's auth token, calls the MLflow tracking server on the internal network, and returns a clean JSON response. The frontend never knows or cares that MLflow exists.
+```typescript
+// With a BFF -- one consistent API
+const models = await fetch('/gen-ai/api/v1/models');
+const prompts = await fetch('/gen-ai/api/v1/mlflow/prompts');
 
-The same pattern applies to every third-party service. LlamaStack, NeMo Guardrails, vector store providers -- each has its own API contract, its own authentication scheme, and its own internal URL. The BFF absorbs all of that complexity. Your React components see one consistent API regardless of how many services are involved behind the scenes.
+// Same origin, same auth flow, same response envelope, same error format
+```
 
-::: tip The General Principle
-Any time your frontend needs data from a service that (a) lives on an internal network, (b) requires server-side credentials, or (c) has an API shape that does not match what the UI needs -- that is a job for the BFF. Kubernetes is just the most prominent example.
+**Input validation and error translation.** The BFF validates requests before they reach the upstream service (checking required fields, sanitizing input, enforcing naming rules) and converts service-specific errors into consistent HTTP responses. Without it, each React component handles its own validation and error parsing for each service's API.
+
+**A single place to change.** When an upstream API changes (a new version, a renamed endpoint, a different auth header), you update one Go file in the BFF. Without it, you hunt through React components to find every place that calls that service.
+
+::: tip When is the BFF strictly necessary vs. nice to have?
+For **Kubernetes**, the BFF is required -- the browser cannot hold service account tokens or reach the API server. For **gateway-exposed services** like MLflow, the BFF is an architectural choice that keeps your frontend simple and your API surface consistent. The more services your frontend talks to, the more valuable that consistency becomes.
 :::
 
 <div class="checkpoint">
 
 #### Checkpoint
 
-You should now understand the three fundamental reasons the browser cannot talk to Kubernetes and other backend services:
-1. **Authentication** -- the browser cannot hold cluster credentials or service tokens safely
-2. **CORS / Network** -- the browser cannot reach internal cluster services, and cross-origin requests get blocked
-3. **Complexity** -- multi-service orchestration and API translation logic does not belong in React components
+You should now understand the three fundamental reasons the browser cannot talk to Kubernetes directly:
+1. **Authentication** -- the browser cannot hold cluster credentials safely
+2. **CORS** -- the browser blocks cross-origin requests to the K8s API server
+3. **Complexity** -- multi-service orchestration logic does not belong in React components
+
+For gateway-exposed services (MLflow, Pipelines), the BFF is not strictly required but provides a unified API surface, input validation, error translation, and a single place to absorb upstream API changes.
 
 </div>
 
