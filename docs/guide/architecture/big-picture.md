@@ -143,7 +143,7 @@ The BFF does not work alone. It talks to Kubernetes and external services to get
 +-------+ +-------+ +-------+
 ```
 
-**What just happened?** We added the bottom layer. The BFF uses Go's `client-go` library for Kubernetes operations (listing CRDs, running SubjectAccessReviews) and standard HTTP clients for external services like LlamaStack, MLflow, and S3. These services are internal to the cluster network -- the browser cannot reach them, but the BFF can because it runs inside the cluster.
+**What just happened?** We added the bottom layer. The BFF uses Go's `client-go` library for Kubernetes operations (listing CRDs, running SubjectAccessReviews) and standard HTTP clients for external services like LlamaStack, MLflow, and S3. Some of these services (like the Kubernetes API) are strictly internal to the cluster, while others (like MLflow) may be exposed through a gateway. Either way, the BFF provides a unified API surface, handles auth injection, and keeps orchestration logic out of React components.
 
 <div class="checkpoint">
 
@@ -218,7 +218,7 @@ Now that you understand each layer, here is the full picture with all the detail
 |   - MLflow (experiment tracking)                                  |
 |   - Model Registry (kubeflow model catalog)                       |
 |   - S3 (object storage)                                           |
-|   - Other cluster-internal services                               |
+|   - Other services                                                |
 +------------------------------------------------------------------+
 ```
 
@@ -448,21 +448,21 @@ Browser (user opens the dashboard URL)
   |
   +-- Dashboard Pod
   |     |
-  |     +-- Fastify backend (:8080)
+  |     +-- Container: Fastify backend (:8080)
   |     |     |
   |     |     +-- serves static frontend bundles    <- pre-built JS, no Webpack
-  |     |     +-- proxies /_mf/* to BFF services    <- Module Federation assets
+  |     |     +-- proxies /_mf/* to BFF containers  <- Module Federation assets
   |     |     +-- proxies /{name}/api/* to BFFs     <- API requests
   |     |
-  |     +-- Static file server (frontend bundles)
-  |
-  +-- gen-ai BFF Pod (via K8s Service)       <- separate Deployment + Service
-  +-- model-registry BFF Pod (via K8s Service)
-  +-- maas BFF Pod (via K8s Service)
+  |     +-- Container: gen-ai BFF (:8143)           <- sidecar container, same pod
+  |     +-- Container: model-registry BFF           <- sidecar container, same pod
+  |     +-- Container: maas BFF                     <- sidecar container, same pod
+  |     +-- Container: mlflow BFF                   <- sidecar container, same pod
+  |     +-- ...                                     <- one sidecar per package
   ...
 ```
 
-**What just happened?** In production, there is no Webpack dev server. The Fastify backend serves pre-built JavaScript bundles directly and proxies API requests to BFF Pods running in the cluster. Each BFF runs as a separate Kubernetes Deployment with its own Service. The backend discovers BFF services from a ConfigMap (`manifests/modular-architecture/federation-configmap.yaml`).
+**What just happened?** In production, there is no Webpack dev server. The Fastify backend serves pre-built JavaScript bundles directly and proxies API requests to BFF containers running in the same pod. Each BFF runs as a **sidecar container** alongside the Fastify backend -- they share the same pod, so the backend can reach each BFF on `localhost` at its designated port. The federation config is managed via a ConfigMap (`manifests/modular-architecture/federation-configmap.yaml`).
 
 ## Development Port Reference
 
