@@ -434,6 +434,7 @@ The entry point (`cmd/main.go`) follows a predictable pattern across all BFFs: p
 
 ::: info See Also
 - [The App Struct & Routes](./app-and-routes) -- what happens inside `api.NewApp()` and `app.Routes()`
+- [Debugging](./debugging) -- setting up VS Code debugging with the mock flags from this chapter
 - [Error Handling (Go Basics)](../go-basics/error-handling) -- the `if err != nil` pattern explained
 - [Pointers](../go-basics/pointers) -- why flag parsing uses `&cfg.Port`
 :::

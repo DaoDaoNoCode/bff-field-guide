@@ -81,6 +81,8 @@ export default defineConfig({
             { text: 'Models & DTOs', link: '/guide/deep-dive/models' },
             { text: 'Integrations', link: '/guide/deep-dive/integrations' },
             { text: 'Error Handling', link: '/guide/deep-dive/error-handling' },
+            { text: 'Debugging', link: '/guide/deep-dive/debugging' },
+            { text: 'Advanced Patterns', link: '/guide/deep-dive/advanced-patterns' },
           ],
         },
       ],

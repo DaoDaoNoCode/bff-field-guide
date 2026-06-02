@@ -422,4 +422,5 @@ The `internal/integrations/` directory contains clients for every external servi
 - [Middleware Chain](./middleware) -- how `AttachClient` middleware creates and injects clients
 - [Authentication & RBAC](./auth) -- the Kubernetes client's role in SubjectAccessReview
 - [The App Struct & Routes](./app-and-routes) -- where factories are initialized in `NewApp()`
+- [Advanced Patterns](./advanced-patterns) -- inter-BFF communication and concurrent service calls
 :::

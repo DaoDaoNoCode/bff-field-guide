@@ -563,4 +563,6 @@ BFF handlers follow a consistent pattern: extract context values from middleware
 - [Middleware Chain](./middleware) -- how context values get set before your handler runs
 - [Models & DTOs](./models) -- the structs that define request/response shapes
 - [Error Handling](./error-handling) -- the error helper functions in detail
+- [Debugging](./debugging) -- when your handler does not work as expected
+- [Advanced Patterns](./advanced-patterns) -- SSE streaming and goroutines beyond standard request-response
 :::

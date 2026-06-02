@@ -284,7 +284,8 @@ func (app *App) RequireAccessToService(next httprouter.Handle) httprouter.Handle
             return                                  // stop processing
         }
         if !allowed {                               // if the user does not have permission
-            app.forbiddenResponse(w, r)             // return 403 Forbidden
+            app.forbiddenResponse(w, r,             // return 403 Forbidden
+                "user does not have permission in this namespace")
             return                                  // stop processing -- handler never runs
         }
 
