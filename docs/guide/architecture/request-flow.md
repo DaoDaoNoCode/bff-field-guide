@@ -33,8 +33,8 @@ Here is the full journey we will trace:
        |                      |                     |    in my-proj?"      |
        |                      |                     |<-- allowed ----------|
        |                      |                     |                      |
-  6.   |                      |                     |-- find LlamaStack -->|
-       |                      |                     |   distribution       |
+  6.   |                      |                     |-- find OGXServer ---->|
+       |                      |                     |   (K8s CRD)          |
        |                      |                     |<-- service URL ------|
        |                      |                     |                      |
   7.   |                      |                     |-- GET /v1/models --->|
