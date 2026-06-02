@@ -76,6 +76,10 @@ type Handle = func(http.ResponseWriter, *http.Request, httprouter.Params)
 
 So middleware is really: "a function that takes a function and returns a function." This is the same concept as higher-order functions in JavaScript -- `const wrappedHandler = attachNamespace(secretsHandler)`.
 
+::: tip If You Know React HOCs, You Already Know This
+Go middleware is exactly a React Higher-Order Component. `withAuth(withTheme(MyComponent))` wraps a component with extra behavior; `AttachNamespace(RequireAccess(Handler))` wraps a handler with extra behavior. Both can short-circuit (HOC renders a login page instead, middleware returns a 403 instead). The only difference is reading direction: React reads outside-in, Go reads inside-out -- but execution order is the same.
+:::
+
 ## `context.WithValue` -- Go's `req` Object
 
 In Express, you attach data to the request object: `req.user = identity`. In Go, you use context values. This is the most important concept to understand about Go middleware.
