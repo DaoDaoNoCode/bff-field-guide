@@ -276,7 +276,36 @@ Each outer function decides whether to call the inner one. If it doesn't, the ch
 The `Routes()` method below is a composite that combines patterns from multiple BFFs (primarily automl for pipeline routes, gen-ai for global middleware). No single BFF has exactly this set of routes. The structure and middleware patterns are the same across all BFFs -- only the specific routes and middleware names differ.
 :::
 
-Here's the complete picture with global and route-level middleware:
+Here's the complete picture. Before diving into the code, look at how the routing tree is structured -- which requests go where and what middleware applies at each level:
+
+```
+                        combinedMux (top-level splitter)
+                        ┌──────────────────────────────┐
+                        │                              │
+               /healthcheck                       / (everything else)
+                        │                              │
+              RecoverPanic                      RecoverPanic
+              EnableTelemetry                   EnableTelemetry
+              (no auth, no CORS)                EnableCORS
+                        │                       InjectRequestIdentity
+                        │                              │
+              healthcheckRouter                     appMux
+              GET /healthcheck                         │
+                                                /api/v1/* (prefix match)
+                                                       │
+                                                  apiRouter (httprouter)
+                                           ┌───────────┼───────────────┐
+                                           │           │               │
+                                     /api/v1/user  /api/v1/secrets  /api/v1/pipeline-runs
+                                     (no extra     AttachNamespace   AttachNamespace
+                                      middleware)                    RequireAccess
+                                                                     AttachClient
+                                                                     AttachPipeline
+```
+
+Two key things to notice: (1) healthcheck gets minimal middleware (no auth) because K8s probes need to reach it without credentials, and (2) API routes get the full stack, then each individual route adds its own middleware on top.
+
+Now the code that builds this tree:
 
 ```go
 func (app *App) Routes() http.Handler {            // Build the complete routing tree
