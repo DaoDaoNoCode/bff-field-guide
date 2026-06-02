@@ -28,7 +28,7 @@ console.log(score);                   // 10 — unchanged! The function only tou
 **Objects are shared.** When you pass an object, the function can reach back and change the original:
 
 ```ts
-// TypeScript — objects are passed by REFERENCE
+// TypeScript — objects are passed by sharing (a copy of the reference)
 function promote(user: { role: string }): void {  // 'user' points to the SAME object
   user.role = "admin";                              // This changes the ORIGINAL object
 }                                                   // Because both 'user' variables point to the same place
@@ -222,12 +222,12 @@ You probably noticed that inside `promote`, we wrote `u.Role` and not `(*u).Role
 Now let's compare the two approaches side by side:
 
 ```go
-// VALUE receiver — gets a copy, can't modify the original
+// VALUE parameter — gets a copy, can't modify the original
 func getName(u User) string {  // u is a User value — a full copy
     return u.Name              // Reads from the copy (fine for reading!)
 }                              // The copy is discarded
 
-// POINTER receiver — gets an address, CAN modify the original
+// POINTER parameter — gets an address, CAN modify the original
 func promote(u *User) {        // u is a *User — a pointer to the original
     u.Role = "admin"           // Modifies the original User
 }                              // The original is changed
@@ -303,7 +303,7 @@ func printUser(u *User) {     // u might be nil — we need to check
 ```
 
 ::: warning
-A nil pointer dereference in Go is a **runtime panic** — your program crashes immediately. Unlike JavaScript where `undefined.something` throws a catchable error, Go panics are harder to recover from. Always guard pointer parameters from external sources against nil.
+A nil pointer dereference in Go is a **runtime panic** — your program crashes unless a recovery mechanism is in place. The BFF's `RecoverPanic` middleware catches these per-request so the server keeps running, but the individual request still fails with a 500. Always guard pointer parameters from external sources against nil.
 :::
 
 <div class="checkpoint">

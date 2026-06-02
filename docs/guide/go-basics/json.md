@@ -471,23 +471,25 @@ func (app *App) WriteJSON(                       // Method on App -- available t
     data any,                                    // The data to encode -- 'any' accepts any type
     headers http.Header,                         // Optional extra headers (can be nil)
 ) error {                                        // Returns an error if encoding fails
-    for key, values := range headers {           // Loop over any extra headers provided
-        for _, value := range values {           // Each header key can have multiple values
-            w.Header().Add(key, value)           // Add each value for this header key
-        }                                        // Add appends; Set would overwrite previous values
-    }                                            // Done with extra headers
+    js, err := json.MarshalIndent(data, "", "\t") // Convert to pretty-printed JSON bytes
+    if err != nil {                              // If encoding fails
+        return err                               // Return the error to the caller
+    }
+    js = append(js, '\n')                        // Add a trailing newline for readability
+
+    for key, value := range headers {            // Loop over any extra headers provided
+        w.Header()[key] = value                  // Set each header directly
+    }
 
     w.Header().Set("Content-Type",               // Always set Content-Type to JSON
         "application/json")                      // This is why handlers don't need to set it
     w.WriteHeader(status)                        // Write the HTTP status code
-                                                 // MUST come before the body
-
-    return json.NewEncoder(w).Encode(data)       // Encode and write the data
-                                                 // Returns any encoding error to the caller
+    _, err = w.Write(js)                         // Write the JSON bytes to the response
+    return err                                   // Return any write error to the caller
 }
 ```
 
-**What just happened?** This helper does three things every JSON response needs: sets any extra headers, sets the Content-Type to `application/json`, writes the status code, and encodes the data. Having this as a method means every handler writes JSON the same way:
+This helper does four things every JSON response needs: marshals the data to pretty-printed JSON, sets any extra headers, sets the Content-Type to `application/json`, writes the status code, and sends the JSON body. Having this as a method means every handler writes JSON the same way:
 
 ```go
 // In a handler -- clean and consistent

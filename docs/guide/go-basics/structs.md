@@ -666,7 +666,7 @@ Don't worry about making it compile yet -- just practice the syntax. We'll cover
 | `user.name` | `user.Name` | Dot notation (same!) |
 | `private field` | `field` (lowercase) | Lowercase first letter = unexported |
 | `public field` | `Field` (uppercase) | Uppercase first letter = exported |
-| `@JsonProperty("x")` | `` `json:"x"` `` | Struct tag instead of decorator |
+| No built-in equivalent | `` `json:"x"` `` | Struct tag controls JSON field name (TS uses the field name directly) |
 | `extends Base` | `Base` (embedded) | Embedding promotes fields, not true inheritance |
 
 ::: tip Key Takeaway

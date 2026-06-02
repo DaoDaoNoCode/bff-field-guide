@@ -79,7 +79,7 @@ fmt.Println(err)               // "something went wrong" -- fmt knows how to pri
                                // It calls .Error() automatically
 ```
 
-What just happened? `errors.New` creates an error value with a message. That's it -- no stack trace, no error code, just a message. The error is a value, like a string or a number. You can store it, pass it around, compare it, and return it from functions.
+`errors.New` creates an error value with a message. That's it -- no stack trace, no error code, just a message. The error is a value, like a string or a number. You can store it, pass it around, compare it, and return it from functions.
 
 <div class="checkpoint">
 
@@ -117,7 +117,7 @@ if err != nil {                           // Check: did something go wrong?
 }
 ```
 
-What just happened? We checked whether `err` is `nil` (Go's `null`). If it's not `nil`, something went wrong, so we handle the error and return early. The `return` is critical -- without it, the code would continue executing with bad data.
+We checked whether `err` is `nil` (Go's `null`). If it's not `nil`, something went wrong, so we handle the error and return early. The `return` is critical -- without it, the code would continue executing with bad data.
 
 ### Step 3: Use the value if no error
 
@@ -135,7 +135,7 @@ fmt.Println("File contents:", string(data))  // Safe to use data
                                               // string(data) converts []byte to string
 ```
 
-What just happened? After the `if err != nil` check and the early `return`, any code below is guaranteed to have valid data. This is a key insight: the `if err != nil { return }` pattern creates a "guard" that ensures you only proceed with good data.
+Here's the key insight: after the `if err != nil` check and the early `return`, any code below is guaranteed to have valid data. The `if err != nil { return }` pattern creates a "guard" that ensures you only proceed with good data.
 
 ### The complete pattern
 
@@ -239,7 +239,7 @@ func processConfig() (*Config, error) {    // Returns (*Config, error) -- the (v
 }
 ```
 
-What just happened? We checked each operation individually. If the file read fails, the error message says "reading config file." If parsing fails, it says "parsing config YAML." If validation fails, it says "validating config." The caller gets a precise error message that tells them exactly what went wrong and where.
+Each operation is checked individually. If the file read fails, the error message says "reading config file." If parsing fails, it says "parsing config YAML." If validation fails, it says "validating config." The caller gets a precise error message that tells them exactly what went wrong and where.
 
 Compare the error messages:
 
@@ -293,7 +293,7 @@ func validate(name string) error {         // Returns only an error (no other va
 }
 ```
 
-What just happened? `errors.New` creates a simple error with a message. The function returns `nil` when validation passes (no error) and a non-nil error when it fails. The caller checks `if err != nil` to see if validation passed.
+The function returns `nil` when validation passes (no error) and a non-nil error when it fails. The caller checks `if err != nil` to see if validation passed.
 
 ### `fmt.Errorf()` -- formatted error messages
 
@@ -314,7 +314,7 @@ func validatePort(port int) error {
 }
 ```
 
-What just happened? `fmt.Errorf` creates an error with a formatted message, similar to how `fmt.Sprintf` creates a formatted string. This is more useful than `errors.New` when you need to include variable values in the error message.
+`fmt.Errorf` creates an error with a formatted message, similar to how `fmt.Sprintf` creates a formatted string. This is more useful than `errors.New` when you need to include variable values in the error message.
 
 <div class="checkpoint">
 
@@ -421,7 +421,7 @@ func startApp() error {
 }
 ```
 
-What just happened? Each layer added its own context with `%w`. The final error message reads like a stack trace in reverse: "starting app: loading config: reading YAML file ...: no such file or directory." And because we used `%w` at every level, `errors.Is(err, os.ErrNotExist)` still works at the top level.
+Each layer added its own context with `%w`. The final error message reads like a stack trace in reverse: "starting app: loading config: reading YAML file ...: no such file or directory." And because we used `%w` at every level, `errors.Is(err, os.ErrNotExist)` still works at the top level.
 
 In TypeScript, the closest equivalent would be:
 
@@ -470,7 +470,7 @@ func (e *ValidationError) Error() string {
 }
 ```
 
-What just happened? We created a struct that holds structured error information (field name and message) and gave it an `Error() string` method. Because it has that method, Go considers it an `error` -- you can return it anywhere an `error` is expected.
+Notice that we created a struct that holds structured error information (field name and message) and gave it an `Error() string` method. Because it has that method, Go considers it an `error` -- you can return it anywhere an `error` is expected.
 
 ### Using a custom error type
 
@@ -661,7 +661,7 @@ func (app *App) CreateModelHandler(w http.ResponseWriter, r *http.Request, ps ht
     // This returns an error if the JSON is malformed
 
     if err != nil {                        // ERROR CHECK 1: Was the JSON valid?
-        app.badRequestResponse(w, r, "invalid JSON body")
+        app.badRequestResponse(w, r, fmt.Errorf("invalid JSON body"))
         // Send a 400 Bad Request with a clear error message
         // The caller sent us garbage JSON -- that's their problem
         return                             // IMPORTANT: stop here, don't continue
@@ -669,7 +669,7 @@ func (app *App) CreateModelHandler(w http.ResponseWriter, r *http.Request, ps ht
 
     // Step 2: Validate the input
     if input.Name == "" {                  // Check if name is missing or empty
-        app.badRequestResponse(w, r, "name is required")
+        app.badRequestResponse(w, r, fmt.Errorf("name is required"))
         // Another 400 -- the JSON was valid but the data is incomplete
         return                             // Stop here
     }
@@ -709,7 +709,7 @@ func (app *App) CreateModelHandler(w http.ResponseWriter, r *http.Request, ps ht
 }
 ```
 
-What just happened? Let's count the error checks:
+Let's count the error checks:
 
 1. **JSON decoding failed** -- bad request (400)
 2. **Name is empty** -- bad request (400)
@@ -762,7 +762,7 @@ func (app *App) serverErrorResponse(w http.ResponseWriter, r *http.Request, err 
 }
 ```
 
-What just happened? These helpers standardize error responses across all handlers. Every 400 error looks the same, every 500 error looks the same. The client always gets a consistent JSON structure. And critically, `serverErrorResponse` logs the real error for debugging but sends a generic message to the client -- never leaking internal details.
+These helpers standardize error responses across all handlers. Every 400 error looks the same, every 500 error looks the same. The client always gets a consistent JSON structure. And critically, `serverErrorResponse` logs the real error for debugging but sends a generic message to the client -- never leaking internal details.
 
 <div class="checkpoint">
 

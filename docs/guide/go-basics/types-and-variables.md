@@ -38,7 +38,7 @@ active := true     // Go infers this as type 'bool'
                    // Same concept as TypeScript's boolean
 ```
 
-What just happened? We created three variables. Go looked at each value on the right side of `:=` and figured out the type automatically. `"Alice"` is a string, `30` is an integer, and `true` is a boolean. This is called **type inference**, and it works almost exactly like TypeScript's `let x = 5` inference -- except Go has more specific numeric types (we'll get to that).
+Here's the key insight: Go looked at each value on the right side of `:=` and figured out the type automatically. `"Alice"` is a string, `30` is an integer, and `true` is a boolean. This is called **type inference**, and it works almost exactly like TypeScript's `let x = 5` inference -- except Go has more specific numeric types (we'll get to that).
 
 <div class="checkpoint">
 
@@ -55,7 +55,7 @@ OK, so `:=` is the shortcut. But Go also has a `var` keyword. Why two ways?
 In TypeScript, you might write:
 
 ```ts
-let count: number;         // Declare with explicit type, value is undefined
+let count: number;         // Declare with type -- value is undefined (or a compile error in strict mode)
 let message: string = "hi"; // Declare with explicit type AND a value
 ```
 
@@ -69,7 +69,7 @@ var message string = "hi"  // Declare with explicit type AND a value
                            // The type 'string' is written AFTER the variable name
 ```
 
-What just happened? We declared two variables using `var`. The first one, `count`, gets a type but no explicit value -- Go automatically gives it the value `0` (the "zero value" for integers). The second one, `message`, gets both a type and a value.
+Notice that `count` gets a type but no explicit value -- Go automatically gives it the value `0` (the "zero value" for integers). The second one, `message`, gets both a type and a value.
 
 So when do you use `var` vs `:=`? Here's the rule:
 
@@ -145,8 +145,8 @@ const apiPath = "/api/v1"      // String literals work too
 Go's `const` is stricter than TypeScript's because the value must be computable at compile time. You can't assign a function return value to a `const`. If you need a value that's computed at runtime but shouldn't change, use `var`:
 
 ```go
-var startTime = time.Now()     // Computed at program startup, but not reassignable by convention
-                               // Go trusts you not to reassign it -- there's no 'readonly' keyword
+var startTime = time.Now()     // Computed at program startup -- technically reassignable,
+                               // but by convention you treat it as immutable. Go has no 'readonly'.
 ```
 
 You can also group constants together, which is handy for related values:
@@ -159,7 +159,7 @@ const (                        // Parentheses group related constants
 )
 ```
 
-What just happened? We grouped three related constants into a single `const` block. This is purely for readability -- it's exactly the same as writing three separate `const` statements. You'll see this pattern everywhere in Go code, especially for configuration defaults in BFF services.
+The parentheses group three related constants into a single `const` block. This is purely for readability -- it's exactly the same as writing three separate `const` statements. You'll see this pattern everywhere in Go code, especially for configuration defaults in BFF services.
 
 ::: info Why this matters for BFF work
 In the ODH Dashboard BFF codebase, you'll see `const` blocks at the top of files defining default configuration values, API paths, and HTTP header names. These are values that never change at runtime and are baked into the compiled binary.
@@ -248,7 +248,7 @@ var positive uint = 42         // Unsigned integer: 0 to very large
                                // Can't be negative. Used for things that are never negative (like array lengths)
 ```
 
-What just happened? We declared integers of various sizes. In practice, you'll almost always use plain `int` (which `:=` gives you automatically). The sized variants (`int8`, `int32`, `int64`) show up when you're interfacing with specific APIs or wire formats -- for example, Kubernetes API fields often use `int32` or `int64`.
+In practice, you'll almost always use plain `int` (which `:=` gives you automatically). The sized variants (`int8`, `int32`, `int64`) show up when you're interfacing with specific APIs or wire formats -- for example, Kubernetes API fields often use `int32` or `int64`.
 
 ::: tip The practical rule
 Just use `int` unless something specific requires a sized type. Let `:=` infer it for you. If you see `int32` or `int64` in BFF code, it's because the upstream API (like Kubernetes) requires that specific size.
@@ -331,7 +331,7 @@ func main() {                  // Program entry point
 }
 ```
 
-What just happened? We declared four variables without values and used them immediately. Every single operation worked correctly because Go guaranteed us a usable default value. No `undefined` checks, no null guards, no NaN surprises.
+Every single operation worked correctly because Go guaranteed us a usable default value. No `undefined` checks, no null guards, no NaN surprises.
 
 ::: info Why this matters for BFF work
 Zero values are a game-changer for BFF code. When you decode a JSON request body into a Go struct, any fields missing from the JSON get their zero values instead of `undefined`. This means you can check `if input.Name == ""` instead of `if input.Name === undefined || input.Name === null || input.Name === ""`. Much simpler.
@@ -373,7 +373,7 @@ price := float64(count)    // Explicitly convert int to float64
 fmt.Println(price)         // 42 (as a float64 now)
 ```
 
-What just happened? We had an `int` and needed a `float64`. In JavaScript, this would happen silently. In Go, we wrote `float64(count)` to make the conversion explicit. If we tried to use `count` where a `float64` was expected without converting it, the compiler would stop us.
+Notice that we had an `int` and needed a `float64`. In JavaScript, this would happen silently. In Go, we wrote `float64(count)` to make the conversion explicit. If we tried to use `count` where a `float64` was expected without converting it, the compiler would stop us.
 
 Now let's try the reverse -- converting a float to an integer:
 
@@ -386,7 +386,7 @@ fmt.Println(whole)         // 3 -- not 3.14159, not 3.0, just 3
                            // The .14159 is gone forever. No warning, no rounding.
 ```
 
-What just happened? We converted `3.14159` to an `int` and got `3`. Go truncates (cuts off the decimal part) rather than rounding. This is important to know -- `int(3.99)` gives you `3`, not `4`.
+The important part: Go truncates (cuts off the decimal part) rather than rounding. `int(3.99)` gives you `3`, not `4`.
 
 ### String conversions -- the `strconv` package
 
@@ -412,7 +412,7 @@ bad, err := strconv.Atoi("hello")  // bad = 0, err = an error value
                                     // Go doesn't give you NaN -- it gives you an error
 ```
 
-What just happened? We used `strconv.Itoa` to turn an integer into a string, and `strconv.Atoi` to turn a string into an integer. Notice that `Atoi` returns two values -- the number and an error. If the string isn't a valid number, you get an error instead of a silent `NaN`. This is a preview of Go's error handling pattern, which we'll cover extensively in [Error Handling](./error-handling).
+Notice that `Atoi` returns two values -- the number and an error. If the string isn't a valid number, you get an error instead of a silent `NaN`. This is a preview of Go's error handling pattern, which we'll cover extensively in [Error Handling](./error-handling).
 
 ::: danger A common trap
 `string(65)` in Go does **NOT** give you `"65"`. It gives you `"A"` -- the character with Unicode code point 65. This trips up every TypeScript developer at least once.
@@ -508,7 +508,7 @@ if err != nil {                 // Check if the error is not nil (not null)
 fmt.Println(result)             // 3.3333333333333335 -- we only reach here if no error
 ```
 
-What just happened? We called `divide` and got back two separate values -- the result and an error. We checked if the error was `nil` (Go's equivalent of `null`), and only used the result if there was no error. This `(value, error)` pattern is the most important pattern in all of Go programming. You'll see it everywhere, and we'll explore it deeply in [Error Handling](./error-handling).
+What just happened? We called `divide` and got back two separate values -- the result and an error. We checked if the error was `nil` (Go's equivalent of `null`), and only used the result if there was no error. This `(value, error)` return pattern is the most important pattern in all of Go programming. You'll see it everywhere, and we'll explore it deeply in [Error Handling](./error-handling).
 
 ::: tip The (value, error) convention
 By convention, the error is always the **last** return value. When a function succeeds, it returns the value and `nil` for the error. When it fails, it returns a zero value and a non-nil error. Every Go developer knows this pattern.
@@ -546,7 +546,7 @@ result, _ := divide(10, 3)    // The _ tells Go: "I know I'm ignoring this value
 fmt.Println(result)            // Use result normally
 ```
 
-What just happened? The `_` (underscore) is a special identifier in Go that means "discard this value." It tells the compiler, "I intentionally don't need this return value." The compiler accepts it because you're being deliberate rather than accidentally forgetting.
+The `_` (underscore) is a special identifier in Go that means "discard this value." It tells the compiler, "I intentionally don't need this return value." The compiler accepts it because you're being deliberate rather than accidentally forgetting.
 
 Here's another common use -- ignoring the index in a loop:
 
@@ -611,7 +611,7 @@ const (                        // Group related constants together
 )                              // All values are compile-time constants (literals)
 ```
 
-What just happened? We defined three constants that represent the default configuration for our BFF server. These are compile-time values -- the Go compiler bakes them directly into the binary.
+These three constants represent the default configuration for our BFF server. They're compile-time values -- the Go compiler bakes them directly into the binary.
 
 Next, a struct to hold the configuration (we'll cover structs fully in the next chapter, but the idea is simple -- it's like a TypeScript `type`):
 
@@ -666,7 +666,7 @@ func NewEnvConfig() *EnvConfig {   // Returns a pointer to EnvConfig (more on po
 }
 ```
 
-What just happened? This function combines everything we learned:
+This function combines everything we learned:
 
 - **`const`** for compile-time defaults that never change.
 - **`:=`** for declaring local variables inside the function.

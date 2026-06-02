@@ -57,7 +57,7 @@ func TestFormatName(t *testing.T) {              // Test function -- must start 
 }                                                // Test function complete
 ```
 
-**What just happened?** That's a complete, runnable test. No imports beyond `"testing"`, no configuration file, no assertion library. The function name starts with `Test` (capital T), takes `*testing.T`, and uses plain Go `if` statements for assertions.
+That's a complete, runnable test. No imports beyond `"testing"`, no configuration file, no assertion library. The function name starts with `Test` (capital T), takes `*testing.T`, and uses plain Go `if` statements for assertions.
 
 Wait -- where's `expect().toBe()`? Go doesn't have it. You use `if` and call `t.Errorf()` when something's wrong. This feels primitive at first, but it means you never need to learn an assertion API. It's just Go code.
 
@@ -178,7 +178,7 @@ func TestDivide(t *testing.T) {                     // Top-level test function
 ```
 :::
 
-**What just happened?** `t.Run("name", func(t *testing.T) { ... })` creates a named subtest, like `it('name', () => { ... })` in Jest. Each subtest gets its own `*testing.T`, so failures in one don't stop the others. You can even run a specific subtest from the command line with `-run TestDivide/divides`.
+Notice that `t.Run("name", func(t *testing.T) { ... })` creates a named subtest, like `it('name', () => { ... })` in Jest. Each subtest gets its own `*testing.T`, so failures in one don't stop the others. You can even run a specific subtest from the command line with `-run TestDivide/divides`.
 
 ## Table-Driven Tests -- Go's Signature Pattern
 
@@ -409,7 +409,7 @@ func TestCreateModel(t *testing.T) {             // Test a POST handler
 }                                                // Test complete
 ```
 
-**What just happened?** For POST requests, we create a `strings.NewReader` with the JSON body and pass it as the third argument to `httptest.NewRequest`. We also pass `httprouter.Params` to simulate URL parameters. The handler doesn't know it's in a test -- it processes the request exactly as it would in production.
+For POST requests, we create a `strings.NewReader` with the JSON body and pass it as the third argument to `httptest.NewRequest`. We also pass `httprouter.Params` to simulate URL parameters. The handler doesn't know it's in a test -- it processes the request exactly as it would in production.
 
 ### Table-driven handler tests
 
@@ -626,7 +626,7 @@ func TestListModelsHandler_ServiceError(t *testing.T) { // Test error handling
 }
 ```
 
-**What just happened?** The only difference from the success test is `err: errors.New("database is down")` on the mock. Same handler, same request, different mock behavior, different expected status code. This is why interface-based mocking is powerful -- you control exactly what each test scenario does.
+The only difference from the success test is `err: errors.New("database is down")` on the mock. Same handler, same request, different mock behavior, different expected status code. This is why interface-based mocking is powerful -- you control exactly what each test scenario does.
 
 <div class="checkpoint">
 

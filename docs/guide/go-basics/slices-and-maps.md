@@ -122,10 +122,10 @@ fmt.Println(items)                             // [one two three]
 `append()` returns a new slice — you MUST reassign it. This is the most common mistake new Go developers make:
 ```go
 items := []string{"a"}                         // Start with ["a"]
-append(items, "b")                             // WRONG — result is thrown away!
+append(items, "b")                             // WON'T COMPILE — "append(...) evaluated but not used"
 items = append(items, "b")                     // CORRECT — reassign to items
 ```
-The compiler won't catch this because `append` does return a value — you're just not using it. Some linters will warn you, but the compiler won't.
+Good news: the compiler actually catches the bare `append(items, "b")` case — it rejects expressions whose return value is discarded. The real danger is assigning to the wrong variable: `other = append(items, "b")` compiles fine but `items` stays unchanged.
 :::
 
 ### Iterating — `for range`

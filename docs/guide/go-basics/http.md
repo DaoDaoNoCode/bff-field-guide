@@ -248,7 +248,7 @@ You'll use these everywhere. `http.StatusOK` is clearer than `200` and your IDE 
 
 ## But Wait -- We Don't Use `net/http` Directly
 
-Everything above works, but the ODH Dashboard BFFs don't use `net/http`'s built-in router directly. The standard `http.HandleFunc` has a limitation that matters for APIs: it doesn't support URL path parameters natively (until Go 1.22, and existing BFF code predates that).
+Everything above works, but the ODH Dashboard BFFs don't use `net/http`'s built-in router directly. Go 1.22 added path parameters to the standard library, but the BFF codebase was written before that and uses `httprouter` instead. The convention stuck -- and `httprouter` remains faster and more explicit.
 
 When you write `GET /api/models/:namespace/:id`, you want `:namespace` and `:id` to be extracted as variables. Express does this automatically. Go's standard library didn't support it until recently, so the BFF codebase uses `httprouter` -- a lightweight router package.
 
@@ -548,7 +548,8 @@ func (app *App) SomeProtectedHandler(            // A handler that needs auth
                                                   // For RHOAI deployments
 
     if userID == "" && token == "" {              // If neither auth method is present...
-        app.unauthorizedResponse(w, r)            // ...send a 401
+        app.unauthorizedResponse(w, r,            // ...send a 401
+            fmt.Errorf("missing credentials"))    // with an error message
         return                                    // ...stop processing
     }                                             // Past here, user is identified
 

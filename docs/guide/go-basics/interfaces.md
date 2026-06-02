@@ -274,7 +274,7 @@ if ok {                                    // Check before using
 }
 ```
 
-**What just happened?** The two-value form `s, ok := val.(string)` never panics. If `val` is a string, `ok` is `true` and `s` holds the value. If not, `ok` is `false` and `s` is the zero value for string (`""`). This is the comma-ok pattern you saw in [Types & Variables](./types-and-variables).
+**What just happened?** The two-value form `s, ok := val.(string)` never panics. If `val` is a string, `ok` is `true` and `s` holds the value. If not, `ok` is `false` and `s` is the zero value for string (`""`). This is the comma-ok pattern you saw in [Slices & Maps](./slices-and-maps) (map lookups use the same `val, ok` idiom).
 
 ::: warning
 A type assertion without the `ok` check will **panic** if the type is wrong:

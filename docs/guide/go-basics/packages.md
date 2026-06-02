@@ -259,11 +259,11 @@ Let's look at a real `go.mod` from the BFF codebase and compare it to `package.j
 ```
 
 ```text [go.mod]
-module github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff
+module github.com/opendatahub-io/gen-ai
 // ↑ Module path — like "name" in package.json, but it's the full import path
 
-go 1.24.0
-// ↑ Minimum Go version — like "engines" in package.json
+go 1.24
+// ↑ Minimum Go version — like "engines" in package.json (check bff/go.mod for current version)
 
 require (
 // ↑ Dependencies — like "dependencies" in package.json
@@ -278,7 +278,7 @@ require (
 Let's walk through each line:
 
 ```text
-module github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff
+module github.com/opendatahub-io/gen-ai
 ```
 The **module path** is the canonical import path for this module. It's usually a URL (like a GitHub path), but Go doesn't actually download from this URL — it uses the Go module proxy. Think of it as the module's globally unique name.
 
@@ -347,10 +347,10 @@ import (
     "github.com/julienschmidt/httprouter"      // HTTP router (third-party)
 
     // === Internal packages — full module path ===
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/api"
+    "github.com/opendatahub-io/gen-ai/internal/api"
     //                                                                    ↑ Package name
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/config"
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/models"
+    "github.com/opendatahub-io/gen-ai/internal/config"
+    "github.com/opendatahub-io/gen-ai/internal/models"
 )
 ```
 
@@ -391,8 +391,8 @@ import (
     "github.com/julienschmidt/httprouter"      // HTTP router
 
     // Internal packages (your own code)
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/api"
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/models"
+    "github.com/opendatahub-io/gen-ai/internal/api"
+    "github.com/opendatahub-io/gen-ai/internal/models"
 )
 ```
 
@@ -633,8 +633,8 @@ import (
     "os"                                       // Standard library
 
     // Internal packages — note the full paths
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/api"
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/config"
+    "github.com/opendatahub-io/gen-ai/internal/api"
+    "github.com/opendatahub-io/gen-ai/internal/config"
 )
 
 func main() {                                 // Entry point
@@ -657,8 +657,8 @@ import (
     "github.com/julienschmidt/httprouter"      // Third-party router
 
     // Sibling internal packages
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/config"
-    "github.com/opendatahub-io/odh-dashboard/packages/gen-ai/bff/internal/models"
+    "github.com/opendatahub-io/gen-ai/internal/config"
+    "github.com/opendatahub-io/gen-ai/internal/models"
 )
 
 type App struct {                              // The core application struct
