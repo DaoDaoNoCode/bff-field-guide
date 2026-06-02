@@ -143,10 +143,6 @@ The BFF handles all the hard parts:
 | Shapes and filters API responses for the UI | Reduces payload size and hides internal details |
 | Handles retries, timeouts, and error translation | Keeps the frontend code simple and focused |
 
-::: tip Think of It Like a Personal Assistant
-An API Gateway is like a company receptionist -- it routes calls but does not know your specific needs. A BFF is like a personal assistant who knows exactly what information you need, in what format, and goes and gets it for you.
-:::
-
 ## BFF vs Traditional Backend vs API Gateway
 
 You might wonder how a BFF differs from other backend patterns you have seen before. Here is the breakdown:
@@ -156,6 +152,10 @@ You might wonder how a BFF differs from other backend patterns you have seen bef
 | **Traditional backend** | One big server (Express, Django, Rails) that serves the UI, handles business logic, manages the database, and does everything | Monolithic apps where one team owns everything |
 | **API Gateway** | A shared proxy that sits in front of all microservices and handles routing, auth, and rate limiting | When multiple frontends share the same backend services |
 | **BFF** | A small, focused backend that serves exactly one frontend's needs | When your frontend has specific data-shaping needs that do not belong in a generic API |
+
+::: tip Think of It Like a Personal Assistant
+An API Gateway is like a company receptionist -- it routes calls but does not know your specific needs. A BFF is like a personal assistant who knows exactly what information you need, in what format, and goes and gets it for you.
+:::
 
 The key insight: a BFF is **owned by the frontend team**. You do not file a ticket with the backend team and wait for them to add an endpoint. You add it yourself, in Go code that lives right next to your React code in the same package directory.
 
