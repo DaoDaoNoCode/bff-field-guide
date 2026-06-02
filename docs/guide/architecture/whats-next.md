@@ -12,45 +12,58 @@ The initiative to fix this is already underway: **migrate the Fastify backend in
 
 ## The Common BFF -- Shared Infrastructure for Everyone
 
-Instead of each team building its own BFF from scratch, the plan introduces a **common/core BFF** -- a shared Go service that provides the platform plumbing every team needs:
+Instead of each team building its own BFF from scratch, there is now a **core BFF** -- a shared Go service that provides the platform plumbing every team needs. It already exists at `distributions/core-bff/` in the monorepo.
 
-- **Authentication** -- 5-strategy user identity extraction (OpenShift OAuth, bearer tokens, etc.), designed to work on non-OpenShift Kubernetes too
+What is built today:
+
+- **Authentication** -- user token extraction (bearer token via configurable header) with `disabled` mode for testing
 - **K8s client** -- a token-switching client factory so each request runs with the user's own permissions
 - **Router, CORS, panic recovery** -- the same `httprouter` pattern you already know from the module BFFs
+- **Inter-BFF communication** -- a `bffclient` package for calling other BFFs (maas, gen-ai, model-registry, mlflow) with auth forwarding
+- **Cluster discovery** -- startup-time queries for OpenShift cluster ID and branding (graceful fallback on vanilla K8s)
+- **OpenAPI + Swagger UI** -- embedded spec with Swagger UI in dev mode
+
+What is planned but not yet implemented:
+
 - **SSRF protection** -- hostname resolution and private IP blocking for outbound requests
 - **Rate limiting** -- per-user request limits
+- **Additional auth strategies** -- beyond bearer token (e.g., OpenShift OAuth, service account)
 
 Think of it as a **shared foundation**. Teams do not build their own auth or K8s clients -- they register handlers on the common router, and the platform handles the rest. It is the same pattern you already use in the module BFFs (`App` struct, middleware chain, `httprouter`), just elevated to a shared service.
 
 ```
-Today:                                      Future:
+Today (current state):                       Future (migration complete):
 
 Dashboard Pod                               Dashboard Pod
 ┌──────────────────────┐                     ┌──────────────────────┐
-│  Fastify (Node.js)   │                     │  Common BFF (Go)     │
-│  - 33 route groups   │                     │  - Core routes       │
+│  Fastify (Node.js)   │ ← still runs       │  Core BFF (Go)       │
+│  - 33 route groups   │                     │  - All routes        │
 │  - Auth, config      │                     │  - Auth, config      │
 │  - K8s proxy         │                     │  - K8s proxy         │
 │  - WebSocket watch   │                     │  - WebSocket watch   │
 │  - MF proxy          │                     │  - MF proxy          │
+├──────────────────────┤                     ├──────────────────────┤
+│  Core BFF (Go)       │ ← NEW, early stage  │                      │
+│  - healthcheck       │   (distributions/   │                      │
+│  - user, namespaces  │    core-bff/)       │                      │
 ├──────────────────────┤                     ├──────────────────────┤
 │  gen-ai BFF (Go)     │                     │  gen-ai BFF (Go)     │
 │  model-reg BFF (Go)  │                     │  model-reg BFF (Go)  │
 │  maas BFF (Go)       │                     │  maas BFF (Go)       │
 │  ...                 │                     │  ...                 │
 └──────────────────────┘                     └──────────────────────┘
-  Two languages, two patterns                  One language, one pattern
+  Two languages + core BFF starting            One language, one pattern
 ```
 
 ## How the Migration Works
 
 The migration is **gradual, not a big-bang cutover**. Fastify endpoints move over in waves, starting with the simplest routes and ending with the most complex. Nothing breaks along the way -- the old Fastify route and the new Go route can run side by side until the team is confident the Go version is solid.
 
-### Phase 0: Lay the Foundation
+### Phase 0: Lay the Foundation ✅ (done)
 
-The first step is deploying the common BFF as a **sidecar container** in the existing dashboard pod -- the same deployment pattern the module BFFs already use. No new infrastructure, no waiting on other initiatives. Just one more container in the pod.
+The core BFF now exists at `distributions/core-bff/` in the monorepo. It is a standalone Go service (not a sidecar) with its own Dockerfile that bundles the BFF and a React frontend into a single container. It replaces the Fastify backend rather than running alongside it.
 
-At this point, the common BFF handles a `/healthcheck` and a few initial routes. Teams that need BFF functionality for dashboard-level features (like connection testing or S3 file browsing) can start contributing handlers immediately.
+The core BFF currently handles: `/healthcheck`, `/api/v1/user`, `/api/v1/namespaces`, and OpenAPI documentation endpoints. It also has inter-BFF communication infrastructure (`bffclient` package) for calling maas, gen-ai, model-registry, and mlflow BFFs. Teams can contribute new handlers using the K8s client factory and inter-BFF client already in place.
 
 ### Phases 1-2: Audit and Extend
 
@@ -84,11 +97,9 @@ The migration is dependency-ordered, not calendar-driven. Phases happen when the
 
 Here is the practical impact, depending on when you are reading this:
 
-**If the common BFF does not exist yet:** Everything in this guide still applies. The module BFF patterns (App struct, middleware, httprouter, handlers) are exactly the patterns the common BFF will use. Learning them now means you are already prepared.
+**Where we are now:** The core BFF exists at `distributions/core-bff/` and Fastify still runs at `backend/`. Both coexist. When adding new dashboard-level routes, check whether they should go in the core BFF (new Go code at `distributions/core-bff/bff/`) or Fastify (legacy, will be migrated later). When in doubt, ask the team.
 
-**If the common BFF is deployed but Fastify still exists:** You might see some routes served by Go and others by Fastify. When adding new dashboard-level routes, check whether they should go in the common BFF (new Go code) or Fastify (legacy, will be migrated later). When in doubt, ask the team.
-
-**If Fastify is gone:** Congratulations -- the migration is complete. The `backend/` directory no longer exists. All routes are Go. The architecture diagram from [The Big Picture](./big-picture) is simpler now: no more Fastify layer.
+**When Fastify is gone:** The `backend/` directory will no longer exist. All routes will be Go. The architecture diagram from [The Big Picture](./big-picture) will simplify: no more Fastify layer.
 
 Regardless of timing, the key takeaway is this: **the Go patterns you are learning in this guide are the future of the entire dashboard backend, not just the module BFFs.** Every hour you spend understanding Go handlers, middleware, and testing is an investment that becomes more valuable as the migration progresses.
 
