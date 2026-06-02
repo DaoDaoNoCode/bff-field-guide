@@ -290,17 +290,18 @@ Here's the complete picture. Before diving into the code, look at how the routin
                         │                       InjectRequestIdentity
                         │                              │
               healthcheckRouter                     appMux
-              GET /healthcheck                         │
-                                                /api/v1/* (prefix match)
-                                                       │
-                                                  apiRouter (httprouter)
-                                           ┌───────────┼───────────────┐
-                                           │           │               │
-                                     /api/v1/user  /api/v1/secrets  /api/v1/pipeline-runs
-                                     (no extra     AttachNamespace   AttachNamespace
-                                      middleware)                    RequireAccess
-                                                                     AttachClient
-                                                                     AttachPipeline
+              GET /healthcheck                    ┌────┴────┐
+                                           /api/v1/*       /* (catch-all)
+                                           (prefix)        (static files +
+                                                │           index.html SPA)
+                                           apiRouter
+                                    ┌──────────┼───────────────┐
+                                    │          │               │
+                              /api/v1/user /api/v1/secrets /api/v1/pipeline-runs
+                              (no extra    AttachNamespace  AttachNamespace
+                               middleware)                  RequireAccess
+                                                            AttachClient
+                                                            AttachPipeline
 ```
 
 Two key things to notice: (1) healthcheck gets minimal middleware (no auth) because K8s probes need to reach it without credentials, and (2) API routes get the full stack, then each individual route adds its own middleware on top.
@@ -337,9 +338,17 @@ func (app *App) Routes() http.Handler {            // Build the complete routing
                     app.AttachDiscoveredPipeline(
                         app.CreatePipelineRunHandler)))))
 
-    // Mount the API router under /api/v1/
+    // Mount the API router and static file server under appMux
     appMux := http.NewServeMux()                   // Standard library multiplexer
-    appMux.Handle("/api/v1/", apiRouter)           // Delegate /api/v1/* to httprouter
+    appMux.Handle("/api/v1/", apiRouter)           // API requests → httprouter (JSON handlers)
+    appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        // Everything that ISN'T /api/v1/* → serve the React frontend
+        // Try to find a static file (JS, CSS, images)
+        // If not found, serve index.html so React Router can handle the path
+        http.ServeFile(w, r, "static/index.html")  // SPA fallback
+    })
+    // Without this fallback, GET / or GET /gen-ai-studio/playground would 404
+    // because apiRouter only knows about /api/v1/* routes
 
     // Health check gets its own router (no auth required!)
     healthcheckRouter := httprouter.New()           // Separate router for health check
