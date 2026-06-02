@@ -408,6 +408,93 @@ err := app.ReadJSON(w, r, &request)                // Parse JSON body into it (l
 
 In Express, `body-parser` middleware parses the body for you and it appears on `req.body`. In Go, you parse it explicitly with `ReadJSON`. The advantage: `ReadJSON` rejects unknown fields, checks for malformed JSON, limits body size, and returns descriptive errors. It's like having a strict body parser built into every handler.
 
+## Beyond POST: PUT, PATCH, and DELETE
+
+You have seen GET (read) and POST (create). The other HTTP methods follow the same middleware + handler pattern -- only the response codes and body handling differ.
+
+### DELETE -- Remove a Resource
+
+DELETE handlers are the simplest write operation. No request body needed -- the resource ID comes from the URL:
+
+```go
+func (app *App) DeletePipelineRunHandler(
+    w http.ResponseWriter,
+    r *http.Request,
+    ps httprouter.Params,                          // URL params -- this time we use them
+) {
+    runID := ps.ByName("runId")                    // read :runId from the URL path
+    if runID == "" {
+        app.badRequestResponse(w, r, fmt.Errorf("missing run ID"))
+        return
+    }
+
+    client := getPipelineClient(r.Context())       // get client from context (set by middleware)
+    err := client.DeletePipelineRun(r.Context(), runID)
+    if err != nil {
+        app.serverErrorResponse(w, r, err)
+        return
+    }
+
+    app.WriteJSON(w, http.StatusOK,                // 200 OK (some APIs use 204 No Content)
+        Envelope[None, None]{}, nil)               // empty envelope -- the resource is gone
+}
+```
+
+The route registration uses `apiRouter.DELETE`:
+
+```go
+apiRouter.DELETE("/api/v1/pipeline-runs/:runId",
+    app.AttachNamespace(
+        app.RequireAccessToPipelineServers(
+            app.AttachPipelineServerClient(
+                app.DeletePipelineRunHandler))))
+```
+
+### Quick Reference: Methods at a Glance
+
+| Method | What It Does | Reads Body? | Typical Status | Example |
+|---|---|---|---|---|
+| `GET` | Read data | No | 200 OK | List models, get a secret |
+| `POST` | Create a resource | Yes | 201 Created | Submit feedback, create a pipeline run |
+| `DELETE` | Remove a resource | No | 200 OK or 204 | Delete a pipeline run, revoke a token |
+| `PUT` | Replace a resource entirely | Yes | 200 OK | Update a full configuration |
+| `PATCH` | Update specific fields | Yes | 200 OK | Change a resource's name or status |
+
+::: tip PUT vs PATCH in Practice
+Most BFF endpoints use POST for creation and DELETE for removal. PUT and PATCH are less common -- when they appear, PUT replaces the entire resource (send all fields) while PATCH updates specific fields (send only what changed). Check the OpenAPI spec for the exact contract.
+:::
+
+## Your Most Common Task: Modifying an Existing Handler
+
+The tutorials teach you to create new handlers from scratch. In practice, your most common task will be modifying an existing one -- adding a query parameter, changing the response shape, or fixing a bug.
+
+Here is the workflow:
+
+**1. Find the handler.** Look in `internal/api/` for a file named after the feature. Model endpoints are in `lsd_models_handler.go`, MCP endpoints in `mcp_handler.go`. If you are not sure, grep for the URL path constant in `internal/constants/`.
+
+**2. Find the route registration.** Open `app.go` and search for the handler function name. This tells you which middleware wraps it -- and therefore what data is already in the request context.
+
+**3. Make your change.** Common modifications:
+
+- **Adding a query parameter:** Read it with `r.URL.Query().Get("param")` in the handler. No middleware change needed.
+- **Adding a field to the response:** Update the struct in `internal/models/`, then set the new field in the handler. Update the OpenAPI spec too.
+- **Adding a new middleware to the chain:** Wrap the handler in `app.go` with the additional middleware. For example, adding `app.AttachNamespace(...)` to an endpoint that didn't previously require a namespace.
+- **Changing error handling:** Find the `if err != nil` block and change the error helper or message.
+
+**4. Update tests.** Find the `*_test.go` file next to the handler. Add or modify test cases in the table-driven test slice.
+
+**5. Update the OpenAPI spec** in `openapi/src/*.yaml` if you changed the request or response shape.
+
+::: tip Find It Fast
+```bash
+# Find which file handles a specific endpoint
+grep -r "ModelsListPath\|/lsd/models" packages/gen-ai/bff/internal/
+
+# Find where a handler is registered
+grep -r "LlamaStackModelsHandler" packages/gen-ai/bff/internal/api/app.go
+```
+:::
+
 ## Writing Responses
 
 ### The WriteJSON Helper

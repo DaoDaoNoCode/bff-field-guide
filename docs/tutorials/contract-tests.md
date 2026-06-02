@@ -136,8 +136,39 @@ Here are the key elements:
 
 ## Step 3: Add Contract Tests for Your Endpoints
 
-::: warning Schema Must Exist First
-Contract tests with `toMatchContract` validate responses against an OpenAPI schema. In a real workflow, you would first add your endpoint's schema to the OpenAPI YAML file. For this tutorial, we will write structural tests that check the response shape without full schema validation, since modifying the OpenAPI spec is beyond scope.
+::: info Adding Your Endpoint to the OpenAPI Spec
+In a real workflow, you update the OpenAPI spec BEFORE writing contract tests with `toMatchContract`. Here is the quick version -- open `api/openapi/automl.yaml` (or your BFF's equivalent) and add your endpoint under `paths`:
+
+```yaml
+  /api/v1/healthcheck/detailed:           # The path (as the BFF sees it)
+    get:                                    # The HTTP method
+      summary: Detailed health check        # Human-readable description
+      operationId: getDetailedHealthcheck   # Unique ID for this operation
+      responses:
+        '200':                              # Success response
+          description: Detailed health info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:                     # The envelope wrapper
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      version:
+                        type: string
+                      go_version:
+                        type: string
+                      uptime_seconds:
+                        type: integer
+                    required: [status, version, go_version, uptime_seconds]
+```
+
+The `required` array is what `toMatchContract` checks -- if the handler forgets a required field, the test fails. This is the single source of truth that keeps Go structs and TypeScript types in sync.
+
+For this tutorial, we will write structural tests that check the response shape directly. Once you are comfortable, add your endpoints to the OpenAPI spec and switch to `toMatchContract` for full schema validation.
 :::
 
 Open the existing test file and add these new `describe` blocks inside the main `describe`:

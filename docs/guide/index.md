@@ -162,6 +162,10 @@ After a week of writing Go, this transparency starts to feel like a superpower. 
 
 This guide is organized into three progressive parts, followed by hands-on tutorials and reference material. Each part builds on the previous one, so going in order is recommended -- but feel free to jump around if you need to fix a bug _right now_ and can't wait.
 
+::: tip Already Know Go?
+If you have written Go before (even a little), skip Part 1 and jump straight to [What is a BFF?](./architecture/what-is-bff). Part 1 teaches Go through TypeScript equivalents -- valuable if Go is new to you, but skippable if you already know the basics. You can always circle back to specific chapters (like [JSON](./go-basics/json) or [Interfaces](./go-basics/interfaces)) when you hit something unfamiliar.
+:::
+
 ### Part 1: Go for TypeScript Devs
 
 This is where you learn the language itself. Every section shows the TypeScript way and the Go way side by side, so you always have a familiar anchor point.
