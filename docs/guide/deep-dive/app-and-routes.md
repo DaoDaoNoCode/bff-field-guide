@@ -348,6 +348,8 @@ The Express equivalent uses `app.use()` for global middleware and per-route midd
 
 ::: warning Common Mistake
 Don't confuse `http.NewServeMux()` with `httprouter.New()`. The standard library's `ServeMux` is used for top-level path routing (healthcheck vs API vs static files), while `httprouter` handles the detailed API routing with URL parameters. They compose together: the `ServeMux` delegates to the `httprouter` for `/api/v1/*` paths.
+
+One subtle `ServeMux` rule: a **trailing slash** changes the matching behavior. `"/healthcheck"` matches only that exact path. `"/api/"` (with trailing slash) matches anything starting with `/api/` -- like a prefix. `"/"` catches everything else as a fallback.
 :::
 
 ## The Shutdown Method
