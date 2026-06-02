@@ -116,7 +116,9 @@ func main() {                              // the entry point -- Go runs this fu
     flag.Parse()                           // parse all the flags from the command line
 
     logger := slog.New(slog.NewTextHandler( // create a structured logger (like pino in Node.js)
-        os.Stdout, &slog.HandlerOptions{},  // writes to stdout with default options
+        os.Stdout, &slog.HandlerOptions{    // writes to stdout
+            Level: cfg.LogLevel,            // log level from --log-level flag (DEBUG, INFO, WARN, ERROR)
+        },
     ))
 
     app, err := api.NewApp(cfg, logger)    // create the application with all dependencies wired up
