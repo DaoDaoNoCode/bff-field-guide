@@ -23,10 +23,10 @@ Let us start from the beginning: why can't the browser just talk to Kubernetes d
 
 Kubernetes uses service account tokens and mTLS certificates for authentication. These credentials live on the server side -- inside Pods, mounted as files in the container filesystem. Your browser does not have them, and you cannot safely ship them to the client.
 
-Here is a concrete example. To list LlamaStack distributions in the `my-project` namespace, you would need to call:
+Here is a concrete example. To list OGXServer resources (which represent LlamaStack deployments) in the `my-project` namespace, you would need to call:
 
 ```
-GET https://kubernetes-api.cluster.local/apis/llamastack.io/v1/namespaces/my-project/distributions
+GET https://kubernetes-api.cluster.local/apis/ogx.io/v1/namespaces/my-project/ogxservers
 ```
 
 That request requires a valid bearer token in the `Authorization` header. The token is either a ServiceAccount token (mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token` inside a Pod) or an OpenShift OAuth token obtained during server-side login flow. Neither of these is available in browser JavaScript.
