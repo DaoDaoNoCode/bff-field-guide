@@ -36,10 +36,12 @@ What is built today:
 - **Cluster discovery** -- startup-time queries for OpenShift cluster ID and branding (graceful fallback on vanilla K8s -- no OpenShift assumptions in core)
 - **OpenAPI + Swagger UI** -- embedded spec with Swagger UI in dev mode
 - **Static file serving** -- serves the React frontend with SPA fallback routing
+- **K8s API proxy** -- reverse proxy at `/api/k8s/*` forwarding all HTTP methods to the Kubernetes API server with bearer token auth injection and sensitive header stripping (cookie, x-forwarded-*, impersonation headers)
+- **WebSocket proxy** -- full-duplex WebSocket passthrough at `/wss/k8s/*` for K8s watch streams with bearer token subprotocol auth, 15-second heartbeat pings, connection tracking, and stale connection cleanup
+- **SSRF protection** -- hostname resolution and private IP blocking (RFC 1918, loopback, link-local) with DNS rebinding prevention via resolve-then-connect-by-IP and redirect validation on proxy responses
 
 What is planned but not yet implemented:
 
-- **SSRF protection** -- hostname resolution and private IP blocking for outbound requests
 - **Rate limiting** -- per-user request limits
 - **Additional auth strategies** -- beyond bearer token (e.g., vanilla K8s OIDC for xKC compatibility)
 
@@ -55,16 +57,18 @@ Dashboard Pod                               Dashboard Pod
 │  - WebSocket watch   │                     │  - WebSocket watch   │
 │  - MF proxy          │                     │  - MF proxy          │
 ├──────────────────────┤                     ├──────────────────────┤
-│  Core BFF (Go)       │ ← NEW, early stage  │                      │
+│  Core BFF (Go)       │ ← NEW, growing      │                      │
 │  - healthcheck       │   (distributions/   │                      │
 │  - user, namespaces  │    core-bff/)       │                      │
+│  - K8s API proxy     │                     │                      │
+│  - WebSocket proxy   │                     │                      │
 ├──────────────────────┤                     ├──────────────────────┤
 │  gen-ai BFF (Go)     │                     │  gen-ai BFF (Go)     │
 │  model-reg BFF (Go)  │                     │  model-reg BFF (Go)  │
 │  maas BFF (Go)       │                     │  maas BFF (Go)       │
 │  ...                 │                     │  ...                 │
 └──────────────────────┘                     └──────────────────────┘
-  Two languages + core BFF starting            One language, one pattern
+  Two languages + core BFF growing              One language, one pattern
 ```
 
 ### Core BFF vs Module BFFs -- What Goes Where?
@@ -74,11 +78,11 @@ The module BFFs (gen-ai, maas, automl, etc.) own **package-specific** logic -- L
 | Core BFF (dashboard-level) | Module BFFs (package-level) |
 |---|---|
 | Dashboard config, feature flags | LlamaStack models, MCP tools (gen-ai) |
-| K8s API passthrough proxy | Pipeline runs, S3 files (automl/autorag) |
+| K8s API passthrough proxy ✅ | Pipeline runs, S3 files (automl/autorag) |
 | User identity, namespace listing | Model subscriptions, API keys (maas) |
 | Connection testing (S3, URI, OCI) | Experiment tracking (mlflow) |
 | Module Federation proxy | Evaluation jobs (eval-hub) |
-| WebSocket watch proxy | Model versions, artifacts (model-registry) |
+| WebSocket watch proxy ✅ | Model versions, artifacts (model-registry) |
 
 Think of it this way: if every team might need it, it belongs in the core BFF. If only one package uses it, it stays in that package's module BFF.
 
@@ -143,7 +147,7 @@ The migration is **gradual, not a big-bang cutover**. Fastify endpoints move ove
 
 ### Phase 0: Lay the Foundation ✅ (done)
 
-The core BFF now exists at `distributions/core-bff/` in the monorepo. It handles `/healthcheck`, `/api/v1/user`, `/api/v1/namespaces`, and OpenAPI documentation endpoints. It also has inter-BFF communication infrastructure (`bffclient` package) for calling maas, gen-ai, model-registry, and mlflow BFFs.
+The core BFF now exists at `distributions/core-bff/` in the monorepo. It handles `/healthcheck`, `/api/v1/user`, `/api/v1/namespaces`, and OpenAPI documentation endpoints. It also has inter-BFF communication infrastructure (`bffclient` package) for calling maas, gen-ai, model-registry, and mlflow BFFs. Additionally, the K8s API proxy (`/api/k8s/*`) and WebSocket proxy (`/wss/k8s/*`) are already implemented, along with SSRF protection and TLS infrastructure for mTLS to the K8s API server.
 
 ### Phases 1-2: Audit and Extend
 
@@ -163,9 +167,13 @@ Fastify endpoints migrate in three waves of increasing complexity:
 
 Each endpoint follows the same pattern: implement the Go handler, write contract tests, validate with the E2E suite, switch traffic, remove the Fastify route.
 
+::: info Ahead of Schedule
+The K8s API passthrough proxy -- the first "Simple" wave item -- is already implemented in the core BFF (`/api/k8s/*` and `/wss/k8s/*`), ahead of the formal migration waves. This means the infrastructure for proxying all HTTP methods and WebSocket watch streams to the K8s API server is ready for use.
+:::
+
 ### Phases 6-8: The Hard Parts and Finish Line
 
-The most complex pieces -- WebSocket K8s watch proxy (~488 LOC), resource caching (~980 LOC, 9 watchers), and Module Federation proxy -- migrate last. These get prototype spikes before production implementation.
+The most complex pieces -- resource caching (~980 LOC, 9 watchers) and Module Federation proxy -- migrate last. These get prototype spikes before production implementation. Note that the WebSocket K8s watch proxy (~560 LOC across `ws_proxy.go` and `ws_tracker.go`) has already been implemented in Phase 0, ahead of the original plan.
 
 Once everything is migrated, shared Go modules are extracted from the core BFF and module BFFs (auth, K8s client factory, response helpers). Finally, the `backend/` directory and all Node.js dependencies are removed.
 
