@@ -33,7 +33,7 @@ type User struct {             // Define a new type called "User"
 }                              // No commas between fields, no semicolons
 ```
 
-What just happened? We created a type called `User` that holds two pieces of data: a `Name` and an `Age`. This is Go's version of a TypeScript `interface` or `type`, but with a crucial difference: this isn't just a compile-time shape. It's a real type that exists at runtime, and you can create instances of it.
+We created a type called `User` that holds two pieces of data: a `Name` and an `Age`. This is Go's version of a TypeScript `interface` or `type`, but with a crucial difference: this isn't just a compile-time shape. It's a real type that exists at runtime, and you can create instances of it.
 
 Let's compare them side by side:
 
@@ -163,7 +163,7 @@ user := User{                  // Create a new User instance using := (short dec
 }                              // Go requires trailing commas in multi-line struct literals
 ```
 
-What just happened? We created a `User` with `Name` set to `"Alice"` and `Age` set to `30`. The syntax is very similar to TypeScript object literals -- field name, colon, value. The one surprise is that **Go requires a trailing comma** on the last field when you write the struct on multiple lines. If you forget it, you'll get a compile error.
+The syntax is very similar to TypeScript object literals -- field name, colon, value. The one surprise is that **Go requires a trailing comma** on the last field when you write the struct on multiple lines. If you forget it, you'll get a compile error.
 
 ### Method 2: Partial initialization (unset fields get zero values)
 
@@ -177,7 +177,7 @@ fmt.Println(user.Age)          // 0 -- not undefined, not nil, just 0
                                // Zero values in action! (from the previous chapter)
 ```
 
-What just happened? We only set `Name`, and Go automatically gave `Age` its zero value of `0`. Remember from the previous chapter: every type has a zero value in Go. This means you can create a struct with only the fields you care about, and everything else gets a safe default.
+Notice that we only set `Name`, and Go automatically gave `Age` its zero value of `0`. Remember from the previous chapter: every type has a zero value in Go. This means you can create a struct with only the fields you care about, and everything else gets a safe default.
 
 ### Method 3: Zero value instance (all defaults)
 
@@ -191,7 +191,7 @@ fmt.Println(user.Name)         // "" -- empty string, not undefined
 fmt.Println(user.Age)          // 0 -- zero, not undefined
 ```
 
-What just happened? We created a `User` without setting any fields. Every field got its zero value. This is perfectly valid and sometimes useful -- for example, when you want to build up a struct field by field.
+Same principle, taken further -- we created a `User` without setting any fields, and every field got its zero value. This is perfectly valid and sometimes useful -- for example, when you want to build up a struct field by field.
 
 ### Method 4: Positional initialization (avoid this)
 
@@ -251,7 +251,7 @@ user.Age = 31             // Modify the Age field directly
 fmt.Println(user.Age)     // 31 -- the field was modified
 ```
 
-What just happened? We read and modified struct fields using dot notation, exactly like JavaScript objects. No getters, no setters, no special syntax. If the field is exported (capital letter), any package can access it. If it's unexported (lowercase), only code in the same package can.
+No surprises here -- dot notation works exactly like JavaScript objects. No getters, no setters, no special syntax. If the field is exported (capital letter), any package can access it. If it's unexported (lowercase), only code in the same package can.
 
 <div class="checkpoint">
 
@@ -315,7 +315,7 @@ type App struct {              // Define the App struct -- holds the BFF's depen
 }
 ```
 
-What just happened? We defined an `App` struct with two fields. Both are lowercase, which means they're private to this package -- other packages can't directly access `app.logger` or `app.config`. This is Go's version of TypeScript's `private` keyword.
+Both fields are lowercase -- the same visibility rule from earlier. They're private to this package, so other packages can't directly access `app.logger` or `app.config`.
 
 Now, the factory function:
 
@@ -342,7 +342,7 @@ app := NewApp(logger, config)  // Call the factory function
                                // This is like: const app = new App(logger, config) in TypeScript
 ```
 
-What just happened? We wrote a plain function called `NewApp` that takes the same parameters a TypeScript constructor would, creates a struct instance, and returns a pointer to it. The `&` operator takes the address of the struct (we'll cover pointers properly in the Pointers chapter -- for now, just know that `&App{...}` means "create an App and give me a reference to it").
+The key insight: `NewApp` is just a plain function. It takes the same parameters a TypeScript constructor would, creates a struct instance, and returns a pointer to it. The `&` operator takes the address of the struct (we'll cover pointers properly in the Pointers chapter -- for now, just know that `&App{...}` means "create an App and give me a reference to it").
 
 The `NewXxx` naming convention is so universal in Go that you should always follow it. When you see `NewHTTPClient`, `NewRouter`, or `NewEnvConfig`, you immediately know it's a factory function that creates and returns a new instance.
 
@@ -405,7 +405,7 @@ fmt.Println(user.Address.City)     // "Portland" -- nested field access
                                    // Just like user.address.city in TypeScript
 ```
 
-What just happened? We created a `User` struct that contains an `Address` struct as one of its fields. Accessing nested fields works with chained dots, exactly like JavaScript objects. The JSON output would look like:
+If you've nested objects in TypeScript, this is identical. The `User` struct contains an `Address` struct as one of its fields, and accessing nested fields works with chained dots. The JSON output would look like:
 
 ```json
 {
@@ -583,7 +583,7 @@ type LlamaStackModel struct {
 }
 ```
 
-What just happened? This struct maps directly to a JSON object from an upstream API. Each field has a `json` tag that defines exactly how it appears in JSON. The `Metadata` field uses `map[string]string` (Go's equivalent of TypeScript's `Record<string, string>`) with `omitempty` so it's excluded from the JSON when there's no metadata.
+Here's where it gets practical. This struct maps directly to a JSON object from an upstream API. Each field has a `json` tag that defines exactly how it appears in JSON. The `Metadata` field uses `map[string]string` (Go's equivalent of TypeScript's `Record<string, string>`) with `omitempty` so it's excluded from the JSON when there's no metadata.
 
 ### An error envelope
 

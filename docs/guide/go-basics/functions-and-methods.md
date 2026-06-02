@@ -30,7 +30,7 @@ func sayHello() {              // "func" keyword, then the function name, then p
 }
 ```
 
-What just happened? We defined a function called `sayHello` that prints a message. The `func` keyword replaces TypeScript's `function`. There's no return type after the parentheses, which means the function doesn't return anything (Go doesn't have a `void` keyword -- you just omit the return type).
+We defined a function called `sayHello` that prints a message. The `func` keyword replaces TypeScript's `function`. There's no return type after the parentheses, which means the function doesn't return anything (Go doesn't have a `void` keyword -- you just omit the return type).
 
 Now let's add a parameter:
 
@@ -55,7 +55,7 @@ func greet(name string) string {       // Returns a string
 }
 ```
 
-What just happened? We built up a function from zero args/zero returns to one arg/one return. The key syntax difference from TypeScript: types come after parameter names and after the parameter list (for the return type), with no colons.
+We just built up a function from zero args/zero returns to one arg/one return. The key syntax difference from TypeScript: types come after parameter names and after the parameter list (for the return type), with no colons.
 
 Let's compare the full syntax side by side:
 
@@ -91,7 +91,7 @@ func add(a, b int) int {      // Same thing, but shorter -- a and b are both int
 }
 ```
 
-What just happened? The second version is a shorthand. When multiple consecutive parameters have the same type, you can list all the names separated by commas and put the type at the end. `a, b int` means "both `a` and `b` are `int`."
+The second version is just shorthand. When multiple consecutive parameters have the same type, you can list all the names separated by commas and put the type at the end. `a, b int` means "both `a` and `b` are `int`."
 
 <div class="checkpoint">
 
@@ -154,7 +154,7 @@ if err != nil {                  // ALWAYS check the error before using the valu
 fmt.Println(port)                // 8080 -- safe to use because we checked the error
 ```
 
-What just happened? `parsePort` returns two values: the parsed port number and an error. The caller receives both and checks the error before using the port. This `(value, error)` pattern is the backbone of Go error handling -- we'll dedicate the entire next chapter to it.
+This is the pattern you'll see more than any other in Go. `parsePort` returns two values: the parsed port number and an error. The caller receives both and checks the error before using the port. This `(value, error)` pattern is the backbone of Go error handling -- we'll dedicate the entire next chapter to it.
 
 ### Named return values
 
@@ -177,7 +177,7 @@ func divide(a, b float64) (result float64, err error) {
 }
 ```
 
-What just happened? By naming the return values `result` and `err`, they become local variables initialized to their zero values. The bare `return` statement (with no values) returns whatever those variables currently hold.
+Notice something unusual: there's no value after `return`. By naming the return values `result` and `err`, they become local variables initialized to their zero values. The bare `return` statement (with no values) returns whatever those variables currently hold.
 
 ::: warning Use named returns sparingly
 Named return values can make short functions clearer, but bare returns in long functions become confusing -- readers have to track what each named variable holds at the return point. In BFF code, you'll mostly see explicit returns like `return result, nil`. Use named returns only for short functions where the names add documentation value.
@@ -234,7 +234,7 @@ func (app *App) Start() {     // This is a METHOD on App
 }
 ```
 
-What just happened? We defined a method called `Start` on the `App` type. The `(app *App)` before the method name is the **receiver** -- it tells Go "this method belongs to the `App` type." Inside the method, `app` is the variable you use to access the struct's fields, just like `this` in TypeScript.
+This is where Go diverges from TypeScript. We defined a method called `Start` on the `App` type, but it lives *outside* the struct body. The `(app *App)` before the method name is the **receiver** -- it tells Go "this method belongs to the `App` type." Inside the method, `app` is the variable you use to access the struct's fields, just like `this` in TypeScript.
 
 Let's add another method:
 
@@ -325,7 +325,7 @@ counter.Increment()            // Increment again
 fmt.Println(counter.Value())   // 2 -- still modifying the original
 ```
 
-What just happened? `Increment` uses a pointer receiver (`*Counter`), so it modifies the original struct. `Value` uses a value receiver (`Counter`), so it works on a copy -- but since it only reads data, that's fine.
+Here's the key difference: `Increment` uses a pointer receiver (`*Counter`), so it modifies the original struct. `Value` uses a value receiver (`Counter`), so it works on a copy -- but since it only reads data, that's fine.
 
 Now let's see what would go wrong with a value receiver on `Increment`:
 
@@ -422,7 +422,7 @@ fmt.Println(counter())             // 2 -- count was 1, incremented to 2
 fmt.Println(counter())             // 3 -- count persists between calls
 ```
 
-What just happened? `makeCounter` creates a local variable `count` and returns an anonymous function that captures it. Every time we call `counter()`, it increments and returns the same shared `count` variable. This is identical to how JavaScript closures work.
+If you've used closures in JavaScript, this should feel familiar. `makeCounter` creates a local variable `count` and returns an anonymous function that captures it. Every time we call `counter()`, it increments and returns the same shared `count` variable. This is identical to how JavaScript closures work.
 
 ### Closures in BFF middleware
 
@@ -456,7 +456,7 @@ func (app *App) RequireAuth(next httprouter.Handle) httprouter.Handle {
 }
 ```
 
-What just happened? `RequireAuth` takes a handler function (`next`) and returns a new handler function. The returned function is a closure that captures both `app` (from the method receiver) and `next` (from the parameter). When a request comes in, the closure checks authentication using `app`, and if it passes, calls `next` to proceed.
+Building on that pattern, `RequireAuth` takes a handler function (`next`) and returns a new handler function. The returned function is a closure that captures both `app` (from the method receiver) and `next` (from the parameter). When a request comes in, the closure checks authentication using `app`, and if it passes, calls `next` to proceed.
 
 This is the same pattern as Express middleware in TypeScript:
 
@@ -522,7 +522,7 @@ result := apply("hello", upper)        // Pass the function as an argument
 fmt.Println(result)                    // "HELLO"
 ```
 
-What just happened? We defined a function type `Transformer`, wrote a function `apply` that accepts a `Transformer` as a parameter, created an anonymous function and assigned it to `upper`, and passed `upper` to `apply`. Functions are values, just like strings or numbers.
+Same concept, different syntax. We defined a function type `Transformer`, wrote a function `apply` that accepts a `Transformer` as a parameter, created an anonymous function and assigned it to `upper`, and passed `upper` to `apply`. Functions are values, just like strings or numbers.
 
 ### The httprouter.Handle type
 
@@ -591,7 +591,7 @@ result := sum(nums...)             // The ... after the slice "spreads" it into 
 fmt.Println(result)                // 6
 ```
 
-What just happened? The `...int` in the parameter list means "accept any number of int arguments." Inside the function, they arrive as a slice (`[]int`). When calling the function, you can pass individual values or spread a slice with `...`.
+The syntax is nearly the same as TypeScript, just rearranged. The `...int` in the parameter list means "accept any number of int arguments." Inside the function, they arrive as a slice (`[]int`). When calling the function, you can pass individual values or spread a slice with `...`.
 
 The most common variadic function you'll use is `fmt.Sprintf`:
 

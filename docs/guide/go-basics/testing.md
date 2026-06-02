@@ -730,3 +730,11 @@ Go testing requires no setup -- just write `_test.go` files and run `go test`. U
 - [Error Handling](./error-handling) -- testing error cases
 - [Structs](./structs) -- mock struct definitions
 :::
+
+---
+
+## You Know Enough Go. Let's Build Something Real.
+
+That's Part 1 -- you now have the Go fundamentals: types, structs, functions, pointers, slices, maps, interfaces, error handling, JSON, HTTP servers, and testing. You don't need to memorize any of it. You need to recognize it when you see it.
+
+Everything from here on is about applying these concepts to the ODH Dashboard codebase. In [Part 2: BFF Architecture](../architecture/what-is-bff), you'll see how these pieces come together in a real Go service -- why BFFs exist, how requests flow through them, and where your code fits in the stack. If you've been itching to open a real BFF file, this is where that happens.

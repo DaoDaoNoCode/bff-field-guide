@@ -54,7 +54,7 @@ fmt.Println(string(data))                         // Print the JSON as a string
 // Output: {"Name":"Alice","Email":"alice@example.com","Age":30}
 ```
 
-**What just happened?** Go converted our struct to JSON, but look at those field names -- `"Name"`, `"Email"`, `"Age"` with capital letters. That's because Go used the Go field names directly. Your frontend is expecting `"name"`, `"email"`, `"age"` (lowercase). Your API contract probably uses `snake_case`. This mismatch will break everything.
+Look at those field names -- `"Name"`, `"Email"`, `"Age"` with capital letters. That's because Go used the Go field names directly. Your frontend is expecting `"name"`, `"email"`, `"age"` (lowercase). Your API contract probably uses `snake_case`. This mismatch will break everything.
 
 ### Adding `json:"name"` tags
 
@@ -81,7 +81,7 @@ fmt.Println(string(data))                        // Print the JSON string
 // Output: {"name":"Alice","email":"alice@example.com","age":30}
 ```
 
-**What just happened?** Now the JSON output uses lowercase keys that match your API contract. The struct tag `` `json:"name"` `` tells the JSON encoder "when you see the `Name` field, write it as `"name"` in JSON." And it works in reverse too -- when decoding JSON with a `"name"` key, Go knows to put that value into the `Name` field.
+The backtick tags are the key. Now the JSON output uses lowercase keys that match your API contract. The struct tag `` `json:"name"` `` tells the JSON encoder "when you see the `Name` field, write it as `"name"` in JSON." And it works in reverse too -- when decoding JSON with a `"name"` key, Go knows to put that value into the `Name` field.
 
 The first time I saw `` `json:"name"` `` with those backticks and escaped quotes, I thought it was a typo. It's not -- it's Go's way of adding metadata to struct fields. The backticks create a "raw string" so you don't need to escape the quotes inside.
 
@@ -116,7 +116,7 @@ fmt.Println(string(data))                         // {"data":"","error":"somethi
                                                   // "count" omitted (zero), "data" stays (no omitempty)
 ```
 
-**What just happened?** The `omitempty` option tells the encoder "skip this field if it's the zero value for its type." Each type has a different zero value:
+The `omitempty` option tells the encoder "skip this field if it's the zero value for its type." Each type has a different zero value:
 
 | Type | Zero value (omitted by `omitempty`) |
 |---|---|
@@ -155,7 +155,7 @@ fmt.Println(string(data))                        // {"id":"user-123","name":"Ali
                                                  // Password and Token are completely gone
 ```
 
-**What just happened?** The `json:"-"` tag is your security safety net. Even if a developer accidentally passes a full `User` struct to a response writer, the password and token will never appear in the JSON output. This is critical for BFF work where your handlers sit between the frontend and sensitive backend data.
+**What just happened?** `json:"-"` is your security safety net. Even if a developer accidentally passes a full `User` struct to a response writer, the password and token will never appear in the JSON output. This is critical for BFF work where your handlers sit between the frontend and sensitive backend data.
 
 ::: info Why not just use a lowercase field name?
 You might wonder: if `Password` should be hidden from JSON, why not just make it lowercase (`password`) so it's private? That would also hide it from JSON (unexported fields are always excluded).
@@ -210,7 +210,7 @@ func handleUpdate(req UpdateUserRequest, user *User) {  // Takes the parsed requ
 }                                                        // Only modified fields get updated
 ```
 
-**What just happened?** The `*` in `*string` makes the field a pointer. When JSON has `"name": "Alice"`, Go creates a string `"Alice"` and sets the pointer to its address. When JSON doesn't include `"name"` at all, the pointer stays `nil`. This three-way distinction is essential for partial update APIs.
+This is the part that catches TypeScript developers off guard. The `*` in `*string` makes the field a pointer. When JSON has `"name": "Alice"`, Go creates a string `"Alice"` and sets the pointer to its address. When JSON doesn't include `"name"` at all, the pointer stays `nil`. This three-way distinction is essential for partial update APIs.
 
 ::: code-group
 ```ts [TypeScript]
@@ -283,7 +283,7 @@ fmt.Println(string(data))                        // Convert bytes to string for 
 // Output: {"id":"model-abc","name":"My Model"}  // The JSON output with lowercase keys
 ```
 
-**What just happened?** `json.Marshal` walked through the struct, looked at each field's `json` tag, and built a JSON byte slice. The `string(data)` conversion at the end is just for printing -- in a real handler, you'd write the bytes directly to the HTTP response.
+`json.Marshal` walked through the struct, looked at each field's `json` tag, and built a JSON byte slice. The `string(data)` conversion at the end is just for printing -- in a real handler, you'd write the bytes directly to the HTTP response.
 
 ::: info
 `json.Marshal` returns `[]byte`, not `string`. This is actually efficient -- when you write to an HTTP response, you're writing bytes anyway. No extra string conversion needed.
@@ -380,7 +380,7 @@ func writeExample(w http.ResponseWriter) {       // w is where the HTTP response
 }
 ```
 
-**What just happened?** `json.NewEncoder(w)` creates an encoder that streams JSON directly to the HTTP response writer. When you call `.Encode(model)`, it converts the struct to JSON and writes it to the response in one step. No intermediate byte slice, no `string(data)` conversion. This is more efficient than `Marshal` + `w.Write()`.
+Here's the difference from `Marshal`. `json.NewEncoder(w)` creates an encoder that streams JSON directly to the HTTP response writer. When you call `.Encode(model)`, it converts the struct to JSON and writes it to the response in one step. No intermediate byte slice, no `string(data)` conversion. This is more efficient than `Marshal` + `w.Write()`.
 
 ### Reading JSON from an HTTP request
 
@@ -405,7 +405,7 @@ func readExample(r *http.Request) {              // r is the incoming HTTP reque
 }
 ```
 
-**What just happened?** `json.NewDecoder(r.Body)` creates a decoder that reads from the request body stream. Calling `.Decode(&input)` reads the JSON and fills in the struct. The anonymous struct (`var input struct { ... }`) is a common Go pattern for request bodies that are only used in one handler -- no need to define a named type just for this.
+Same idea in reverse. `json.NewDecoder(r.Body)` creates a decoder that reads from the request body stream. Calling `.Decode(&input)` reads the JSON and fills in the struct. The anonymous struct (`var input struct { ... }`) is a common Go pattern for request bodies that are only used in one handler -- no need to define a named type just for this.
 
 ### Side by side with Express
 
@@ -589,7 +589,7 @@ func (app *App) CreateModelHandler(              // Method on App struct
 }                                                 // Handler complete
 ```
 
-**What just happened?** This is the complete lifecycle of a BFF handler:
+Now you can see the complete lifecycle of a BFF handler:
 
 1. **Decode** -- read the request body and parse it into a typed struct
 2. **Validate** -- check that required fields are present and valid
@@ -703,7 +703,7 @@ fmt.Println(err)                                 // json: cannot unmarshal strin
                                                  // Unmarshal catches the type mismatch!
 ```
 
-**What just happened?** Unlike TypeScript where `JSON.parse` happily gives you whatever shape the JSON has, Go's Unmarshal validates that the JSON types match the struct field types. A string value can't go into an `int` field. This catches bugs that TypeScript would let slip through to runtime.
+Notice the contrast with TypeScript. Unlike `JSON.parse`, which happily gives you whatever shape the JSON has, Go's Unmarshal validates that the JSON types match the struct field types. A string value can't go into an `int` field. This catches bugs that TypeScript would let slip through to runtime.
 
 ## Quick Reference
 
