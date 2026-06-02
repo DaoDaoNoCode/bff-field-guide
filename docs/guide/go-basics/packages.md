@@ -261,9 +261,6 @@ Let's look at a real `go.mod` from the BFF codebase and compare it to `package.j
 ```text [go.mod]
 module github.com/opendatahub-io/gen-ai
 // ↑ Module path — like "name" in package.json, but it's the full import path
-// NOTE: This path doesn't point to a real GitHub repo! The code actually lives inside
-// the odh-dashboard monorepo at packages/gen-ai/bff/. The module path is just a
-// logical name — Go uses it for imports, not for downloading.
 
 go 1.24
 // ↑ Minimum Go version — like "engines" in package.json (check bff/go.mod for current version)
@@ -278,12 +275,20 @@ require (
 ```
 :::
 
+::: warning Don't Visit That URL
+You will see module paths like `github.com/opendatahub-io/gen-ai` and instinctively want to open them in your browser. **Some of them are 404s.** Don't panic — you didn't find a bug.
+
+Go module paths are like email addresses for code: they're unique identifiers, not necessarily clickable links. In the ODH Dashboard monorepo, each BFF declares its own module path in `go.mod`, but the code all lives together in the `odh-dashboard` repo under `packages/<name>/bff/`. Some paths (like `opendatahub-io/mlflow`) happen to point to real repos. Others (like `opendatahub-io/gen-ai`) are just names — the code lives at `packages/gen-ai/bff/` and nowhere else.
+
+The rule: **copy module paths from `go.mod`, don't guess them from the directory structure.** When you write an import like `"github.com/opendatahub-io/gen-ai/internal/api"`, Go resolves it locally because the module is right there in the monorepo. It never tries to download it.
+:::
+
 Let's walk through each line:
 
 ```text
 module github.com/opendatahub-io/gen-ai
 ```
-The **module path** is the canonical import path for this module. It looks like a GitHub URL, but Go doesn't actually download from it — it's just a globally unique name. In the ODH Dashboard monorepo, each BFF's module path (like `github.com/opendatahub-io/gen-ai`) doesn't correspond to a standalone GitHub repo. The code lives inside `packages/gen-ai/bff/` in the odh-dashboard repo. This is normal for Go modules inside monorepos.
+The **module path** is the canonical import path for this module. Think of it as the module's globally unique name — it looks like a URL, but Go uses it for imports, not for downloading.
 
 ```text
 go 1.24.0
