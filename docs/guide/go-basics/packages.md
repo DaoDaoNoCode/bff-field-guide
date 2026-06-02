@@ -261,6 +261,9 @@ Let's look at a real `go.mod` from the BFF codebase and compare it to `package.j
 ```text [go.mod]
 module github.com/opendatahub-io/gen-ai
 // ↑ Module path — like "name" in package.json, but it's the full import path
+// NOTE: This path doesn't point to a real GitHub repo! The code actually lives inside
+// the odh-dashboard monorepo at packages/gen-ai/bff/. The module path is just a
+// logical name — Go uses it for imports, not for downloading.
 
 go 1.24
 // ↑ Minimum Go version — like "engines" in package.json (check bff/go.mod for current version)
@@ -280,7 +283,7 @@ Let's walk through each line:
 ```text
 module github.com/opendatahub-io/gen-ai
 ```
-The **module path** is the canonical import path for this module. It's usually a URL (like a GitHub path), but Go doesn't actually download from this URL — it uses the Go module proxy. Think of it as the module's globally unique name.
+The **module path** is the canonical import path for this module. It looks like a GitHub URL, but Go doesn't actually download from it — it's just a globally unique name. In the ODH Dashboard monorepo, each BFF's module path (like `github.com/opendatahub-io/gen-ai`) doesn't correspond to a standalone GitHub repo. The code lives inside `packages/gen-ai/bff/` in the odh-dashboard repo. This is normal for Go modules inside monorepos.
 
 ```text
 go 1.24.0
