@@ -115,6 +115,10 @@ func main() {                              // the entry point -- Go runs this fu
     flag.BoolVar(&cfg.MockK8sClient, "mock-k8s-client", false, "Use mock K8s") // --mock-k8s-client flag
     flag.Parse()                           // parse all the flags from the command line
 
+    logger := slog.New(slog.NewTextHandler( // create a structured logger (like pino in Node.js)
+        os.Stdout, &slog.HandlerOptions{},  // writes to stdout with default options
+    ))
+
     app, err := api.NewApp(cfg, logger)    // create the application with all dependencies wired up
     if err != nil {                        // if initialization failed (e.g., can't connect to K8s)
         log.Fatalf("failed to create app: %v", err) // log the error and exit
