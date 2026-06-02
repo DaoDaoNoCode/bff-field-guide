@@ -63,7 +63,7 @@ The Fastify backend also serves the dashboard configuration, proxies Kubernetes 
 +-----------------------------+
 ```
 
-**What just happened?** We added a proxy layer. The browser never talks to the BFF directly. Instead, it sends requests to the Fastify backend (same origin as the page), which validates the user's OAuth token, rewrites the URL path, and forwards the request to the BFF. This is how authentication flows from the browser to the BFF without the browser knowing anything about Go servers or Kubernetes tokens.
+The proxy layer is the key addition here. The browser never talks to the BFF directly. Instead, it sends requests to the Fastify backend (same origin as the page), which validates the user's OAuth token, rewrites the URL path, and forwards the request to the BFF. This is how authentication flows from the browser to the BFF without the browser knowing anything about Go servers or Kubernetes tokens.
 
 ::: info Why Not Just Put Auth in the BFF?
 The Fastify backend handles authentication for the entire dashboard -- not just BFF requests but also direct Kubernetes API proxying (`/api/k8s/*`), dashboard config (`/api/config`), and Module Federation assets. Centralizing auth in one place means every service benefits from the same security checks.
@@ -104,7 +104,7 @@ In development, there is one more layer: the Webpack dev server. It serves your 
 +-----------------------------+
 ```
 
-**What just happened?** We added the development server. When you run `npm run dev`, the Webpack dev server starts on port 4010 (configured via `FRONTEND_PORT` in `.env.development`). Your browser talks to `:4010`, which serves the React app and proxies API requests to the Fastify backend on `:8080`. This is why you see `localhost:4010` in your browser's address bar during development.
+This is the development-only layer. When you run `npm run dev`, the Webpack dev server starts on port 4010 (configured via `FRONTEND_PORT` in `.env.development`). Your browser talks to `:4010`, which serves the React app and proxies API requests to the Fastify backend on `:8080`. This is why you see `localhost:4010` in your browser's address bar during development.
 
 ::: info Development Only
 This layer disappears in production. In production, the Fastify backend (or a static file server) serves the pre-built JavaScript bundles directly. There is no Webpack, no hot reloading, no dev proxy.
@@ -143,7 +143,7 @@ The BFF does not work alone. It talks to Kubernetes and external services to get
 +-------+ +-------+ +-------+
 ```
 
-**What just happened?** We added the bottom layer. The BFF uses Go's `client-go` library for Kubernetes operations (listing CRDs, running SubjectAccessReviews) and standard HTTP clients for external services like LlamaStack, MLflow, and S3. Some of these services (like the Kubernetes API) are strictly internal to the cluster, while others (like MLflow) may be exposed through a gateway. Either way, the BFF provides a unified API surface, handles auth injection, and keeps orchestration logic out of React components.
+This is the data layer -- the bottom of the stack. The BFF uses Go's `client-go` library for Kubernetes operations (listing CRDs, running SubjectAccessReviews) and standard HTTP clients for external services like LlamaStack, MLflow, and S3. Some of these services (like the Kubernetes API) are strictly internal to the cluster, while others (like MLflow) may be exposed through a gateway. Either way, the BFF provides a unified API surface, handles auth injection, and keeps orchestration logic out of React components.
 
 <div class="checkpoint">
 
@@ -373,7 +373,7 @@ Here is how it works:
          :8080           :4000              :8081
 ```
 
-**What just happened?** Each remote package exposes an `extensions` module that defines navigation items (sidebar links), routes (URL paths), and area flags (feature gates). The host dynamically loads these extensions at runtime and integrates them into the unified dashboard experience. This is why you see navigation items for Gen AI, Model Registry, etc., even though they are developed in separate packages.
+Here is the key point: each remote package exposes an `extensions` module that defines navigation items (sidebar links), routes (URL paths), and area flags (feature gates). The host dynamically loads these extensions at runtime and integrates them into the unified dashboard experience. This is why you see navigation items for Gen AI, Model Registry, etc., even though they are developed in separate packages.
 
 Each remote package can optionally have its own BFF running on a unique port. The BFF serves the API that the package's React components consume.
 
@@ -401,7 +401,7 @@ Step 4 (separate path, not API): Static asset requests go through /_mf/:
   Backend proxies to the BFF's static file server
 ```
 
-**What just happened?** There are two different URL patterns at play. API requests use the proxy path declared in `package.json` (e.g., `/gen-ai/api`). Static Module Federation assets (like `remoteEntry.js` and JS chunks) use the `/_mf/{name}/` prefix. Do not confuse the two -- they are separate routing mechanisms.
+Notice two separate URL patterns at play. API requests use the proxy path declared in `package.json` (e.g., `/gen-ai/api`). Static Module Federation assets (like `remoteEntry.js` and JS chunks) use the `/_mf/{name}/` prefix. Do not confuse the two -- they are separate routing mechanisms.
 
 ## Development Mode vs Production Mode
 
@@ -433,7 +433,7 @@ Backend (localhost:8080)
   ...
 ```
 
-**What just happened?** In dev mode, everything runs as separate processes on your machine. The main frontend dev server on `:4010` serves your React app and proxies API calls to the Fastify backend on `:8080`. The backend then proxies BFF requests to the individual Go services on their respective ports.
+In dev mode, everything runs as separate processes on your machine. The main frontend dev server on `:4010` serves your React app and proxies API calls to the Fastify backend on `:8080`. The backend then proxies BFF requests to the individual Go services on their respective ports.
 
 ### Production Mode
 
@@ -462,7 +462,7 @@ Browser (user opens the dashboard URL)
   ...
 ```
 
-**What just happened?** In production, there is no Webpack dev server. The Fastify backend serves pre-built JavaScript bundles directly and proxies API requests to BFF containers running in the same pod. Each BFF runs as a **sidecar container** alongside the Fastify backend -- they share the same pod, so the backend can reach each BFF on `localhost` at its designated port. The federation config is managed via a ConfigMap (`manifests/modular-architecture/federation-configmap.yaml`).
+In production, the architecture simplifies. There is no Webpack dev server. The Fastify backend serves pre-built JavaScript bundles directly and proxies API requests to BFF containers running in the same pod. Each BFF runs as a **sidecar container** alongside the Fastify backend -- they share the same pod, so the backend can reach each BFF on `localhost` at its designated port. The federation config is managed via a ConfigMap (`manifests/modular-architecture/federation-configmap.yaml`).
 
 ## Development Port Reference
 

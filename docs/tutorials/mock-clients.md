@@ -403,6 +403,11 @@ assert.Equal(t, []string{"my-namespace"}, mock.getModelsArgs)  // Verify the arg
 ```
 :::
 
+::: info If You Get Stuck
+- [Integrations](../guide/deep-dive/integrations) -- how factories and interfaces work in the BFF
+- [Interfaces (Go Basics)](../guide/go-basics/interfaces) -- Go's implicit interface satisfaction explained
+:::
+
 ---
 
 <div class="checkpoint">

@@ -57,7 +57,7 @@ type App struct {                                  // The App struct -- like a c
 }
 ```
 
-**What just happened?** Every field is a dependency that handlers might need. There are no globals, no singletons hidden behind `require()` calls. If a handler needs a Kubernetes client, it gets it through `app.kubernetesClientFactory`. If it needs to log, it uses `app.logger`. Everything is explicit.
+Every field is a dependency that handlers might need. There are no globals, no singletons hidden behind `require()` calls. If a handler needs a Kubernetes client, it gets it through `app.kubernetesClientFactory`. If it needs to log, it uses `app.logger`. Everything is explicit.
 
 ::: info Simplified Composite
 The `App` struct shown above is a simplified composite that blends fields from the automl BFF (e.g., `pipelineServerClientFactory`, `s3ClientFactory`, `repositories`) with gen-ai fields. No single BFF has exactly this set of fields. Real BFFs have many more fields depending on the services they integrate with. For example, gen-ai has `llamaStackClientFactory`, `mcpClientFactory`, `mlflowClientFactory`, `bffClientFactory`, `memoryStore`, and others. Always check the actual `internal/api/app.go` in the BFF you are working on.
@@ -115,7 +115,7 @@ Now the Kubernetes client factory -- the most important dependency:
     }
 ```
 
-**What just happened?** The `--mock-k8s-client` flag flows from the entry point through config into `NewApp()`. If it's set, we spin up an in-memory Kubernetes API server using Go's `envtest` framework. If not, we connect to the real cluster. The handler code never knows or cares which one it got -- that's the power of the factory pattern.
+The mock-or-real decision flows from the config flag. If `--mock-k8s-client` is set, we spin up an in-memory Kubernetes API server using Go's `envtest` framework. If not, we connect to the real cluster. The handler code never knows or cares which one it got -- that's the power of the factory pattern.
 
 The same pattern repeats for every other dependency:
 
@@ -179,7 +179,7 @@ func (app *App) Routes() http.Handler {            // Method on App that returns
 }
 ```
 
-**What just happened?** The BFFs use [`julienschmidt/httprouter`](https://github.com/julienschmidt/httprouter), a fast HTTP router for Go. It's like a minimal Express Router. That `(app *App)` before `Routes` means this is a method on the `App` struct -- every handler can access `app.logger`, `app.config`, etc.
+The BFFs use [`julienschmidt/httprouter`](https://github.com/julienschmidt/httprouter), a fast HTTP router for Go. It's like a minimal Express Router. That `(app *App)` before `Routes` means this is a method on the `App` struct -- every handler can access `app.logger`, `app.config`, etc.
 
 ### Add an API Route
 
@@ -219,7 +219,7 @@ Here's where it gets interesting. Some routes need middleware -- to extract the 
             app.GetSecretsHandler))                // Handler: fetch and return secrets
 ```
 
-**What just happened?** `AttachNamespace` is a middleware function that wraps `GetSecretsHandler`. It extracts the namespace from the query string, validates it, and puts it in the request context. Only then does it call the handler. If the namespace is missing, it returns a 400 error and the handler never runs.
+`AttachNamespace` is a middleware function that wraps `GetSecretsHandler`. It extracts the namespace from the query string, validates it, and puts it in the request context. Only then does it call the handler. If the namespace is missing, it returns a 400 error and the handler never runs.
 
 Now let's see a route with the full middleware chain:
 
@@ -336,7 +336,7 @@ func (app *App) Routes() http.Handler {            // Build the complete routing
 }
 ```
 
-**What just happened?** There's a lot going on, so let me highlight the key decisions:
+There is a lot going on, so let me highlight the key decisions:
 
 1. **Two separate routers**: The health check has minimal middleware (no auth, no CORS) because Kubernetes probes need to hit it without authentication.
 
@@ -344,23 +344,7 @@ func (app *App) Routes() http.Handler {            // Build the complete routing
 
 3. **Route-level middleware** is applied per-route: `AttachNamespace`, `RequireAccess`, `AttachClient` only run on routes that need them.
 
-**Express equivalent:**
-
-```typescript
-// Global middleware
-app.use(recoverPanic);                             // Catch all uncaught exceptions
-app.use(enableTelemetry);                          // Add trace ID
-app.use(cors());                                   // CORS
-app.use(injectRequestIdentity);                    // Auth
-
-// Route-level middleware
-app.get('/api/v1/secrets',                         // Secrets route
-  attachNamespace,                                 // Only this route needs namespace
-  getSecretsHandler);
-
-// Health check -- no auth middleware
-app.get('/healthcheck', healthcheckHandler);
-```
+The Express equivalent uses `app.use()` for global middleware and per-route middleware arrays for route-level middleware. The execution order is the same; only the reading direction differs (left-to-right in Express vs. inside-out in Go).
 
 ::: warning Common Mistake
 Don't confuse `http.NewServeMux()` with `httprouter.New()`. The standard library's `ServeMux` is used for top-level path routing (healthcheck vs API vs static files), while `httprouter` handles the detailed API routing with URL parameters. They compose together: the `ServeMux` delegates to the `httprouter` for `/api/v1/*` paths.
@@ -380,7 +364,7 @@ func (app *App) Shutdown() error {                 // Called during graceful shu
 }
 ```
 
-**What just happened?** This is called by the graceful shutdown code in `main.go`. In mock mode, it tears down the in-memory Kubernetes API server. In production, it might close database connections or stop background workers.
+This is called by the graceful shutdown code in `main.go`. In mock mode, it tears down the in-memory Kubernetes API server. In production, it might close database connections or stop background workers.
 
 ::: info Checkpoint
 The complete picture: `NewApp()` creates the dependency container with real or mock clients. `Routes()` wires up all endpoints with middleware chains. The health check bypasses auth. API routes get the full middleware stack. `Shutdown()` cleans up when the server stops.

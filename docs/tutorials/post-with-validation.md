@@ -481,6 +481,12 @@ Before moving on, verify all of these:
 
 </div>
 
+::: info If You Get Stuck
+- [Writing Handlers](../guide/deep-dive/handlers) -- the full handler pattern with ReadJSON and WriteJSON
+- [Error Handling](../guide/deep-dive/error-handling) -- how error helpers work and when to use each one
+- [Common Gotchas](/reference/gotchas) -- the "return after error" pattern and other pitfalls
+:::
+
 ## What's Next
 
 Your endpoint works perfectly. But how do you make sure it *keeps* working as the codebase changes? You do not want to run `curl` by hand every time someone touches the handler. In [Tutorial 3: Writing Handler Tests](./writing-tests), you will write automated unit tests that exercise your handler without starting a server.

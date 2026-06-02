@@ -168,7 +168,7 @@ func (app *App) InjectRequestIdentity(             // Global middleware
 }
 ```
 
-**What just happened?** This is the first gate. Every API request must pass through here. If auth is disabled (dev mode), the request passes through with a mock or empty identity. If auth is enabled, the identity must be extractable from headers or the request is rejected.
+This is the first gate. Every API request must pass through here. If auth is disabled (dev mode), the request passes through with a mock or empty identity. If auth is enabled, the identity must be extractable from headers or the request is rejected.
 
 ::: warning Disabled Auth Behavior Varies
 When `--auth-method=disabled`:
@@ -230,7 +230,7 @@ func (f *TokenClientFactory) ExtractRequestIdentity( // Token auth extraction
 }
 ```
 
-**What just happened?** Internal auth reads explicit headers and builds an identity from them. Token auth just extracts the raw token -- the token itself carries the user's identity, and the K8s API server will validate it when we make API calls.
+Internal auth reads explicit headers and builds an identity from them. Token auth just extracts the raw token -- the token itself carries the user's identity, and the K8s API server will validate it when we make API calls.
 
 ::: info Checkpoint
 Stage 1 is complete: we know *who* the user is. Their identity is in the request context. Now for stage 2: checking *what* they can do.

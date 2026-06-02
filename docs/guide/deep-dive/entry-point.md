@@ -38,7 +38,7 @@ package main                                       // This tells Go: "this file 
                                                    // Every Go executable must have exactly one "package main"
 ```
 
-**What just happened?** In Node.js, your entry point is whatever `package.json` points to. In Go, the entry point is always a file in `package main`. This isn't a choice -- it's how the Go compiler finds the start of your program.
+In Node.js, your entry point is whatever `package.json` points to. In Go, the entry point is always a file in `package main`. This isn't a choice -- it's how the Go compiler finds the start of your program.
 
 ## The Import Block
 
@@ -58,7 +58,7 @@ import (                                           // Import block -- like your 
 )
 ```
 
-**What just happened?** Two things stand out if you're coming from Node.js. First, Go's standard library includes an HTTP server -- no need for Express or Fastify. Second, Go separates standard library imports (no dots in the path) from external imports (URL-style paths) with a blank line. This is a convention enforced by the formatter.
+Two things stand out if you're coming from Node.js. First, Go's standard library includes an HTTP server -- no need for Express or Fastify. Second, Go separates standard library imports (no dots in the path) from external imports (URL-style paths) with a blank line. This is a convention enforced by the formatter.
 
 ## `func main()` -- Where It All Begins
 
@@ -105,7 +105,7 @@ Now let's add a few more flags:
                                                    // Must be called after all flags are defined
 ```
 
-**What just happened?** After `flag.Parse()`, running `go run ./cmd --port 9090 --mock-k8s-client` sets `cfg.Port` to `9090` and `cfg.MockK8sClient` to `true`. The env var fallback creates a priority chain: **CLI flag > environment variable > hardcoded default**.
+After `flag.Parse()`, running `go run ./cmd --port 9090 --mock-k8s-client` sets `cfg.Port` to `9090` and `cfg.MockK8sClient` to `true`. The env var fallback creates a priority chain: **CLI flag > environment variable > hardcoded default**.
 
 Here's a comparison table so you can see the mapping:
 
@@ -163,7 +163,7 @@ At this point we have: `package main`, imports, flag parsing with env var defaul
     )                                              // Close the slog.New call
 ```
 
-**What just happened?** `slog` is Go's built-in structured logging package (added in Go 1.21). It's similar to `pino` or `winston` in Node.js, but it ships with the standard library -- no `npm install` needed.
+`slog` is Go's built-in structured logging package (added in Go 1.21). It's similar to `pino` or `winston` in Node.js, but it ships with the standard library -- no `npm install` needed.
 
 A log call like this:
 
@@ -198,7 +198,7 @@ Now comes the most important line in the whole file:
     }                                              // If we get past this, app is ready to use
 ```
 
-**What just happened?** `api.NewApp()` is a factory function that creates the `App` struct with all its dependencies wired up. This is where the BFF decides whether to use real or mock Kubernetes clients, initializes HTTP clients for upstream services, and sets up the internal state. We'll explore `NewApp()` in detail in [The App Struct & Routes](./app-and-routes).
+This is the most important line in `main.go`. `api.NewApp()` is a factory function that creates the `App` struct with all its dependencies wired up. This is where the BFF decides whether to use real or mock Kubernetes clients, initializes HTTP clients for upstream services, and sets up the internal state. We'll explore `NewApp()` in detail in [The App Struct & Routes](./app-and-routes).
 
 Notice the `if err != nil` pattern -- you'll see this hundreds of times in Go. There's no `try/catch`. The function returns `(*App, error)` and you check the error immediately. When I first saw this, I thought it was tedious. After working with it for a while, I appreciated how it makes every failure point visible. We'll cover this in detail in the [Error Handling (Go Basics)](../go-basics/error-handling) chapter.
 
@@ -223,7 +223,7 @@ Now we create and start the HTTP server:
     }                                              // Server is configured but not yet started
 ```
 
-**What just happened?** This creates a standard library `http.Server`. The key field is `Handler: app.Routes()` -- this returns an `http.Handler` with all the routes registered. Think of it as the fully-configured Express app being passed to `http.createServer()`. The timeout fields are explicit here -- Express leaves these to defaults or requires manual configuration.
+This creates a standard library `http.Server`. The key field is `Handler: app.Routes()` -- this returns an `http.Handler` with all the routes registered. Think of it as the fully-configured Express app being passed to `http.createServer()`. The timeout fields are explicit here -- Express leaves these to defaults or requires manual configuration.
 
 Now start it:
 
@@ -306,7 +306,7 @@ Now the graceful shutdown itself:
     logger.Info("server stopped")                  // All done
 ```
 
-**What just happened?** Don't worry about goroutines and channels yet. The important thing to understand is:
+Don't worry about goroutines and channels yet. The important thing to understand is:
 1. The server runs in the background (`go func()`)
 2. The main goroutine waits for Ctrl+C
 3. On shutdown, it gives in-flight requests 30 seconds to finish
@@ -333,7 +333,7 @@ The most important flags for day-to-day development are the `--mock-*` flags:
         "Use mock MCP client")                     // Help text
 ```
 
-**What just happened?** These let you run the BFF **without a real Kubernetes cluster or upstream services**. When `--mock-k8s-client` is set, the BFF uses Go's `envtest` framework to spin up a lightweight, in-memory Kubernetes API server. This is how Cypress tests and local development work without a cluster.
+These flags let you run the BFF **without a real Kubernetes cluster or upstream services**. When `--mock-k8s-client` is set, the BFF uses Go's `envtest` framework to spin up a lightweight, in-memory Kubernetes API server. This is how Cypress tests and local development work without a cluster.
 
 Running a BFF locally:
 

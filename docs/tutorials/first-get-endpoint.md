@@ -387,6 +387,12 @@ If any of these fail, go back and re-read the step where you created that file. 
 
 </div>
 
+::: info If You Get Stuck
+- [Directory Structure](../guide/architecture/directory-structure) -- where each file goes and why
+- [Models & DTOs](../guide/deep-dive/models) -- how struct tags and JSON encoding work
+- [The App Struct & Routes](../guide/deep-dive/app-and-routes) -- how route registration works
+:::
+
 ## Congratulations
 
 You just wrote your first BFF endpoint. It was not that scary, was it? A struct, a function, a route registration, and some `curl`. You now know the fundamental pattern that every BFF endpoint in the entire repo follows.

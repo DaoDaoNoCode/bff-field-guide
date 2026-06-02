@@ -61,7 +61,7 @@ func (app *App) AttachNamespace(                   // Middleware: takes a handle
 }
 ```
 
-**What just happened?** Let me break down the key pieces:
+Here are the key pieces:
 
 1. **Input**: takes `next` (the handler to wrap), type `httprouter.Handle`
 2. **Output**: returns a new `httprouter.Handle`
@@ -197,7 +197,7 @@ func (app *App) EnableTelemetry(                   // Global middleware
 }
 ```
 
-**What just happened?** Every request gets a UUID. All log messages from that request include the trace ID. When debugging, you search logs by trace ID to see everything that happened for one request. This is the same concept as correlation IDs in Express.
+Every request gets a UUID. All log messages from that request include the trace ID. When debugging, you search logs by trace ID to see everything that happened for one request. This is the same concept as correlation IDs in Express.
 
 **What it adds to context:** `TraceIdKey` (string UUID) and `TraceLoggerKey` (logger with trace ID baked in).
 
@@ -225,7 +225,7 @@ func (app *App) EnableCORS(                        // Global middleware
 }
 ```
 
-**What just happened?** Same concept as the `cors` npm package. If `AllowedOrigins` is empty, CORS is disabled and the middleware is a no-op.
+Same concept as the `cors` npm package. If `AllowedOrigins` is empty, CORS is disabled and the middleware is a no-op.
 
 **What it adds to context:** Nothing -- it only adds response headers.
 
@@ -276,7 +276,7 @@ func (app *App) InjectRequestIdentity(             // Global middleware -- runs 
 }
 ```
 
-**What just happened?** This is the first real security gate. In production, it reads the user's identity from HTTP headers (either `kubeflow-userid`/`kubeflow-groups` headers or an `Authorization: Bearer` token). In dev mode with auth disabled, the automl/maas BFFs create a fake admin user; the gen-ai BFF simply passes the request through with no identity extraction. See [Authentication & RBAC](./auth) for the full story.
+This is the authentication gate. In production, it reads the user's identity from HTTP headers (either `kubeflow-userid`/`kubeflow-groups` headers or an `Authorization: Bearer` token). In dev mode with auth disabled, the automl/maas BFFs create a fake admin user; the gen-ai BFF simply passes the request through with no identity extraction. See [Authentication & RBAC](./auth) for the full story.
 
 **What it adds to context:** `RequestIdentityKey` (*kubernetes.RequestIdentity). The struct fields vary by BFF: automl/maas stores UserID, Groups, and Token; gen-ai stores only Token and MCPToken.
 
@@ -413,7 +413,7 @@ func (app *App) AttachOGXClient(                   // Route-level middleware (na
 }
 ```
 
-**What just happened?** The handler doesn't create its own client -- middleware does it. The handler just reads the client from context. This is dependency injection at the request level: each request gets its own client with the right credentials and service URL.
+Notice that the handler does not create its own client -- middleware does. The handler just reads the client from context. This is dependency injection at the request level: each request gets its own client with the right credentials and service URL.
 
 **What it adds to context:** `PipelineServerClientKey` (the service client interface -- real or mock).
 

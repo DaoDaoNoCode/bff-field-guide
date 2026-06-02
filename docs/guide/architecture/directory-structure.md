@@ -125,7 +125,7 @@ func main() {                              // the entry point -- Go runs this fu
 }
 ```
 
-**What just happened?** This is the entire startup sequence. Parse flags, create the app, start the server. Everything else is in `internal/`. If you have used Express, this is like:
+That is the entire startup sequence. Parse flags, create the app, start the server. Everything else is in `internal/`. If you have used Express, this is like:
 
 ```typescript
 // The Express equivalent of main.go
@@ -161,7 +161,7 @@ func getEnvAsString(key string, defaultVal string) string { // read an env var a
 }
 ```
 
-**What just happened?** These are typed environment variable readers -- like a simple version of a `config.ts` file that reads from `process.env`. Go does not have a built-in way to read env vars with defaults and type conversion, so these helpers fill that gap.
+These are typed environment variable readers -- like a simple version of a `config.ts` file that reads from `process.env`. Go does not have a built-in way to read env vars with defaults and type conversion, so these helpers fill that gap.
 
 ::: tip Why `cmd/`?
 The `cmd/` directory is a Go convention. It signals "this is where the executable lives." If a project had multiple executables (like a server and a CLI tool), each would get its own subdirectory: `cmd/server/main.go`, `cmd/cli/main.go`. Our BFFs have just one: `cmd/main.go`.
@@ -231,7 +231,7 @@ func (app *App) Routes() http.Handler {              // returns the complete HTT
 }
 ```
 
-**What just happened?** The `App` struct is Go's version of dependency injection. Instead of importing singletons or using a dependency injection framework, you pass all dependencies through the `App` struct. The `Routes()` method is like your Express `app.use()` and `app.get()` calls, all in one place.
+The `App` struct is Go's version of dependency injection. Instead of importing singletons or using a dependency injection framework, you pass all dependencies through the `App` struct. The `Routes()` method is like your Express `app.use()` and `app.get()` calls, all in one place.
 
 ### `*_handler.go` -- One File Per Endpoint Group
 
@@ -298,7 +298,7 @@ type EnvConfig struct {                               // all configuration in on
 }
 ```
 
-**What just happened?** Every configuration option lives in one struct. Each field corresponds to a command-line flag (parsed in `cmd/main.go`). The mock flags are what let you run the BFF locally without a real cluster.
+Every configuration option lives in one struct. Each field corresponds to a command-line flag (parsed in `cmd/main.go`). The mock flags are what let you run the BFF locally without a real cluster.
 
 ## `internal/constants/` -- Path Constants and Keys
 
@@ -371,7 +371,7 @@ integrations/
 └── ...
 ```
 
-**What just happened?** Mocks live right next to the code they mock. This is a deliberate choice in the gen-ai BFF. When you start the BFF with `--mock-k8s-client`, the `NewApp` function in `app.go` swaps the real `KubernetesClientFactory` for `k8smocks.NewMockedKubernetesClientFactory()`. Same interface, different implementation.
+Mocks live right next to the code they mock. This is a deliberate choice in the gen-ai BFF. When you start the BFF with `--mock-k8s-client`, the `NewApp` function in `app.go` swaps the real `KubernetesClientFactory` for `k8smocks.NewMockedKubernetesClientFactory()`. Same interface, different implementation.
 
 ::: warning Mock Location Varies by BFF
 Not all BFFs organize mocks the same way. The gen-ai BFF co-locates mocks within each integration subdirectory (e.g., `kubernetes/k8smocks/`). Other BFFs like automl and maas have a top-level `internal/mocks/` directory instead. Always check the specific BFF you are working in to find where mocks live.
@@ -457,7 +457,7 @@ func (r *ModelRepository) ListModelsWithStatus(        // a business logic metho
 }
 ```
 
-**What just happened?** Repositories combine data from multiple sources. Not all BFFs use this pattern -- some put orchestration logic directly in handlers. But for complex operations that touch multiple services, repositories keep handlers clean and testable.
+Repositories combine data from multiple sources. Not all BFFs use this pattern -- some put orchestration logic directly in handlers. But for complex operations that touch multiple services, repositories keep handlers clean and testable.
 
 ## `openapi/` -- API Specification
 
@@ -594,8 +594,16 @@ Most of the structure is consistent across all seven BFFs, but there are differe
 | `internal/testutil/` | Sometimes | Shared test utilities |
 | `openapi/` | Yes | One spec per BFF |
 
-::: info The model-registry Exception
-The model-registry BFF lives at `packages/model-registry/upstream/bff/` instead of `packages/model-registry/bff/`. This is because model-registry is a git subtree synced from the kubeflow/model-registry upstream repository. The `upstream/` prefix reflects this origin. The internal structure is the same as other BFFs.
+::: warning The model-registry Exception (Git Subtree)
+The model-registry BFF lives at `packages/model-registry/upstream/bff/` instead of `packages/model-registry/bff/`. This is because model-registry is a **git subtree** synced from the kubeflow/model-registry upstream repository.
+
+What this means for you:
+- **Do not edit files inside `upstream/` directly** -- your changes will be overwritten on the next sync
+- To contribute changes, submit them to the upstream kubeflow/model-registry repo first
+- The sync is managed via `package-subtree` CLI commands (see the package's README for the workflow)
+- The internal BFF structure (cmd/, internal/api/, etc.) is the same as other BFFs
+
+If you are assigned a model-registry ticket, ask your team lead whether the change belongs upstream or downstream before starting.
 :::
 
 ## Quick Reference: "If I Need to Add X, Where Do I Put It?"

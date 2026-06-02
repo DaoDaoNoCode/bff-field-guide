@@ -253,7 +253,7 @@ func (app *App) GetSecretsHandler(                 // Handler method on App
 }
 ```
 
-**What just happened?** The structure is nearly identical to Express. The biggest difference is error handling: Express uses `try/catch`, while Go checks each error explicitly with `if err != nil`. Every error branch sends a response and returns immediately. There's no exception unwinding -- you handle each failure at the point it occurs.
+The structure is nearly identical to Express. The biggest difference is error handling: Express uses `try/catch`, while Go checks each error explicitly with `if err != nil`. Every error branch sends a response and returns immediately. There's no exception unwinding -- you handle each failure at the point it occurs.
 
 ## Example 2: GET by ID Handler (automl BFF)
 
@@ -399,7 +399,7 @@ func (app *App) CreatePipelineRunHandler(          // POST handler for creating 
 }
 ```
 
-**What just happened?** The critical difference from Express is this line:
+The critical difference from Express is this line:
 
 ```go
 var request models.CreatePipelineRunRequest        // Declare a variable with the expected struct type
@@ -477,7 +477,7 @@ func (app *App) ReadJSON(                          // Helper to parse JSON reque
 }
 ```
 
-**What just happened?** This is the Go equivalent of Express's `express.json()` middleware with strict validation. In Express, malformed JSON gives you a generic parse error. Here, you get specific, user-friendly error messages. The `DisallowUnknownFields()` call is especially nice -- it catches typos in request bodies.
+This is the Go equivalent of Express's `express.json()` middleware with strict validation. In Express, malformed JSON gives you a generic parse error. Here, you get specific, user-friendly error messages. The `DisallowUnknownFields()` call is especially nice -- it catches typos in request bodies.
 
 ### The Envelope Pattern
 

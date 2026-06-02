@@ -357,6 +357,11 @@ Here is how all the test types work together to keep things in sync:
 
 If all three agree, you know the frontend can safely call the BFF and get what it expects. If any one of them drifts, a test catches it before it reaches production.
 
+::: info If You Get Stuck
+- [Models & DTOs](../guide/deep-dive/models) -- the structs that define the API contract
+- [Error Handling](../guide/deep-dive/error-handling) -- the error envelope format contract tests validate
+:::
+
 ---
 
 <div class="checkpoint">

@@ -105,21 +105,7 @@ type KubernetesClientInterface interface {          // Defines what a client mus
 }
 ```
 
-**TypeScript equivalent:**
-
-```typescript
-interface KubernetesClientFactory {                // Same idea in TypeScript
-  getClient(ctx: Context): Promise<KubernetesClient>; // Create or get a client
-  extractRequestIdentity(headers: Headers): RequestIdentity; // Extract identity
-}
-
-interface KubernetesClient {                       // The client contract
-  canListPipelineApplications(                     // RBAC check
-    identity: RequestIdentity, namespace: string
-  ): Promise<boolean>;
-  getNamespaces(identity: RequestIdentity): Promise<NamespaceModel[]>; // List namespaces
-}
-```
+The TypeScript equivalent would be two interfaces: `KubernetesClientFactory` (creates clients) and `KubernetesClient` (calls K8s APIs). The pattern is identical.
 
 ### Real vs Mock -- The Factory Decision
 
@@ -146,7 +132,7 @@ client, err := app.kubernetesClientFactory.GetClient(ctx) // "Give me a client"
 // Don't care if it's real or mock -- same interface    // It just works
 ```
 
-**What just happened?** This is **dependency injection** through interfaces. Same concept as injecting mock services in your React tests, but at the Go layer. The handler depends on the interface, not the implementation. Tests swap in mocks, production uses the real thing. No code changes needed.
+This is dependency injection through interfaces. Same concept as injecting mock services in your React tests, but at the Go layer. The handler depends on the interface, not the implementation. Tests swap in mocks, production uses the real thing. No code changes needed.
 
 ## The Kubernetes Client
 
@@ -196,7 +182,7 @@ func (f *TokenClientFactory) GetClient(            // Create a K8s client for a 
 }
 ```
 
-**What just happened?** With token auth, the BFF never has more power than the user. Every K8s call goes through the user's own credentials. This is the more secure model.
+With token auth, the BFF never has more power than the user. Every K8s call goes through the user's own credentials. This is the more secure model.
 
 ## HTTP Clients for Upstream Services
 
@@ -264,7 +250,7 @@ func (c *PipelineServerClient) ListPipelineRuns(   // Fetch pipeline runs from t
 }
 ```
 
-**What just happened?** Compare this to the TypeScript version at the top of this chapter. The structure is almost identical: build URL, set headers, make request, check status, parse response. The main difference is Go's explicit error handling at every step, where TypeScript lets the promise chain handle failures.
+Compare this to the TypeScript version at the top of this chapter. The structure is almost identical: build URL, set headers, make request, check status, parse response. The main difference is Go's explicit error handling at every step, where TypeScript lets the promise chain handle failures.
 
 ### The Factory
 
@@ -354,7 +340,7 @@ func (app *App) PipelineRunsHandler(               // The actual handler
 }
 ```
 
-**What just happened?** The handler doesn't know or care how the client was created, what URL it points to, or whether it's real or mock. It just calls methods on the interface. This separation of concerns is what makes the BFF testable and flexible.
+The handler does not know or care how the client was created, what URL it points to, or whether it's real or mock. It just calls methods on the interface. This separation of concerns is what makes the BFF testable and flexible.
 
 ## Mock Clients
 
@@ -394,19 +380,9 @@ func (f *MockClientFactory) CreateClient(          // Create a mock client (igno
 }
 ```
 
-**What just happened?** Since both the real and mock clients implement the same `PipelineServerClientInterface`, the handler code works identically with either one. This is the power of Go interfaces -- they're satisfied implicitly. If your mock struct has all the right methods, it automatically implements the interface. No `implements` keyword needed.
+Since both implement the same interface, the handler works identically with either. This is the power of Go interfaces -- they're satisfied implicitly. If your mock struct has all the right methods, it automatically implements the interface. No `implements` keyword needed.
 
-**TypeScript equivalent:**
-
-```typescript
-class MockPipelineClient implements PipelineServerClient { // Must declare implements
-  async listPipelineRuns(): Promise<PipelineRun[]> { // Mock implementation
-    return [{ id: 'run-001', name: 'mock-run', status: 'Succeeded' }];
-  }
-}
-```
-
-In Go, you don't write `implements PipelineServerClientInterface`. If the struct has all the methods the interface requires, it satisfies the interface. The compiler checks this for you.
+In TypeScript, you would write `class MockPipelineClient implements PipelineServerClient`. In Go, there is no `implements` keyword -- if the struct has all the required methods, it satisfies the interface automatically.
 
 ## Comparing to Frontend API Services
 

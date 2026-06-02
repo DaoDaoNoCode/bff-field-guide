@@ -475,6 +475,11 @@ Before moving on, verify:
 
 </div>
 
+::: info If You Get Stuck
+- [Writing Handlers](../guide/deep-dive/handlers) -- the handler patterns you're testing
+- [Go CLI Quick Reference](/reference/cli) -- test commands and flags
+:::
+
 ## What's Next
 
 The handler tests above work because the feedback handler does not call any external services. But most real handlers need a Kubernetes client, or a pipeline server client, or some other dependency. How do you test those? In Jest, you would reach for `jest.mock()`. In Go, there is no runtime module replacement. Instead, you write a second implementation of the same interface. It sounds more work than it is -- [Tutorial 4: Mock Clients](./mock-clients) will show you exactly how.

@@ -87,7 +87,7 @@ type ErrorEnvelope struct {                        // The outermost wrapper
 }
 ```
 
-**What just happened?** Notice two important details:
+Notice two important details:
 
 1. `StatusCode` has `` `json:"-"` `` -- it drives the HTTP response status code but never appears in the JSON body. The status code lives in the HTTP header, the string version lives in the JSON.
 
@@ -284,7 +284,7 @@ func (app *App) errorResponse(                     // The single exit point for 
 }
 ```
 
-**What just happened?** This is the single exit point for all error responses. It ensures:
+This is the single exit point for all error responses. It ensures:
 1. The response is always valid JSON (wrapped in `ErrorEnvelope`)
 2. The HTTP status code matches the error
 3. The content type is `application/json`
@@ -426,37 +426,9 @@ func (app *App) GetSecretsHandler(                 // A handler with multiple er
 }
 ```
 
-**What just happened?** Every single operation that can fail has its own error handling. There's no `try/catch` wrapping the whole function. Each error is handled at the point it occurs with the right status code and message. This is Go's explicit error handling philosophy -- verbose but clear.
+Every single operation that can fail has its own error handling. There's no `try/catch` wrapping the whole function. Each error is handled at the point it occurs with the right status code and message. This is Go's explicit error handling philosophy -- verbose but clear.
 
-**Compare to Express:**
-
-```typescript
-app.get('/api/v1/secrets', async (req, res) => {   // Express version
-  try {
-    const namespace = req.query.namespace;         // Read param
-    if (!namespace) {                              // Validate
-      return res.status(400).json({                // 400
-        error: { code: '400', message: 'Missing namespace' }
-      });
-    }
-
-    const secrets = await k8sClient.getSecrets(namespace); // Fetch data
-    res.json({ data: secrets });                   // 200
-  } catch (err) {                                  // Catch everything else
-    if (err instanceof ForbiddenError) {           // Check error type
-      return res.status(403).json({                // 403
-        error: { code: '403', message: 'Insufficient permissions' }
-      });
-    }
-    console.error(err);                            // Log it
-    res.status(500).json({                         // 500
-      error: { code: '500', message: 'Internal server error' }
-    });
-  }
-});
-```
-
-The structure is the same -- validate inputs, call services, handle errors. Go checks errors inline with `if err != nil`, while Express uses `try/catch`.
+In Express, you would wrap this in a single `try/catch` block. Go checks each error inline with `if err != nil`. The structure is the same -- validate inputs, call services, handle errors -- just expressed differently.
 
 ## Error Wrapping with `fmt.Errorf`
 
