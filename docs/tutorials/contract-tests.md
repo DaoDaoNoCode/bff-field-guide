@@ -188,7 +188,7 @@ Open the existing test file and add these new `describe` blocks inside the main 
           data: {                             // The envelope wraps everything in "data"
             status: string;                   // "healthy"
             version: string;                  // "1.0.0"
-            go_version: string;               // "go1.24.3"
+            go_version: string;               // "go1.26.0"
             uptime_seconds: number;           // seconds since start
           };
         };

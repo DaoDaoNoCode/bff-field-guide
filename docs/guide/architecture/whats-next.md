@@ -4,7 +4,7 @@
 
 ## The Split-Stack Problem
 
-Right now, the ODH Dashboard runs a **split backend**. The Fastify (Node.js) server handles ~33 API route categories across ~12,700 lines of code -- dashboard config, Kubernetes proxying, RBAC, WebSocket watch, and more. Meanwhile, 7 Go-based module BFFs (gen-ai, model-registry, maas, automl, autorag, eval-hub, mlflow) handle package-specific logic.
+Right now, the ODH Dashboard runs a **split backend**. The Fastify (Node.js) server handles ~33 API route categories across ~12,700 lines of code -- dashboard config, Kubernetes proxying, RBAC, WebSocket watch, and more. Meanwhile, 8 Go-based module BFFs (gen-ai, model-registry, maas, automl, autorag, eval-hub, mlflow, agent-ops) handle package-specific logic.
 
 This means the dashboard team maintains two backend languages, two sets of patterns, and two mental models. If you are a frontend developer who just learned Go for the BFF, you still need to understand Fastify when you touch dashboard-level routes. If you are debugging a request, you might start in Go and end up in TypeScript. Context-switching is expensive.
 
@@ -29,9 +29,18 @@ The core BFF already exists at `distributions/core-bff/` in the monorepo. It is 
 
 What is built today:
 
-- **Authentication** -- user token extraction via configurable header (`x-forwarded-access-token` by default) with `disabled` mode for testing
+- **Authentication** -- user token extraction via configurable header (`x-forwarded-access-token` by default) with `disabled` mode for testing. Admin RBAC middleware (`secureAdminRoute`) for gating admin-only endpoints.
+- **Platform detection** -- auto-detects OpenShift vs vanilla K8s (XKS) at startup via ClusterVersion CRD probe. Platform-specific routes are gated by `requirePlatform` middleware, so OpenShift-only endpoints return 404 on vanilla K8s.
 - **K8s client** -- a token-switching client factory so each request runs with the user's own permissions
-- **Router, CORS, panic recovery** -- the same `httprouter` pattern you already know from the module BFFs
+- **Router, CORS, panic recovery** -- uses Go's standard `http.ServeMux` (not httprouter) with routes split across `routes_base.go`, `routes_config.go`, `routes_connection_types.go`, `routes_model_serving.go`, and `routes_openapi.go`
+- **Dashboard config CRUD** -- `GET/PATCH /api/config`, `GET/PATCH /api/dashboardConfig/:namespace/:name`, cluster settings (`GET/PUT /api/cluster-settings`)
+- **Components and status** -- `GET /api/components`, `GET /api/components/remove`, `GET /api/status`
+- **Connection types** -- full CRUD for connection types (`GET/POST/PUT/PATCH/DELETE /api/connection-types`)
+- **Connection testing** -- `POST /api/v1/connections/test` for S3, URI, and OCI connection probes
+- **Serving runtimes** -- `POST /api/servingRuntimes` for serving runtime creation
+- **Prometheus query proxy** -- `POST /api/prometheus/query`, `queryRange`, `pvc`, `bias`, `serving`
+- **NIM integration** -- `POST/DELETE/GET /api/integrations/nim`, `GET /api/nim-serving/:nimResource`
+- **Model serving proxy** -- reverse proxy at `/api/service/model-serving/*`
 - **Inter-BFF communication** -- a `bffclient` package for calling module BFFs (maas, gen-ai, model-registry, mlflow) with auth forwarding
 - **Cluster discovery** -- startup-time queries for OpenShift cluster ID and branding (graceful fallback on vanilla K8s -- no OpenShift assumptions in core)
 - **OpenAPI + Swagger UI** -- embedded spec with Swagger UI in dev mode
@@ -39,11 +48,12 @@ What is built today:
 - **K8s API proxy** -- reverse proxy at `/api/k8s/*` forwarding all HTTP methods to the Kubernetes API server with bearer token auth injection and sensitive header stripping (cookie, x-forwarded-*, impersonation headers)
 - **WebSocket proxy** -- full-duplex WebSocket passthrough at `/wss/k8s/*` for K8s watch streams with bearer token subprotocol auth, 15-second heartbeat pings, connection tracking, and stale connection cleanup
 - **SSRF protection** -- hostname resolution and private IP blocking (RFC 1918, loopback, link-local) with DNS rebinding prevention via resolve-then-connect-by-IP and redirect validation on proxy responses
+- **Namespace management** -- `GET /api/namespaces/:name/:context` for namespace mutation
+- **Allowed users** -- `GET /api/status/:namespace/allowedUsers`
 
 What is planned but not yet implemented:
 
 - **Rate limiting** -- per-user request limits
-- **Additional auth strategies** -- beyond bearer token (e.g., vanilla K8s OIDC for xKC compatibility)
 
 ```
 Today (current state):                       Future (migration complete):
@@ -51,21 +61,25 @@ Today (current state):                       Future (migration complete):
 Dashboard Pod                               Dashboard Pod
 ┌──────────────────────┐                     ┌──────────────────────┐
 │  Fastify (Node.js)   │ ← still runs       │  Core BFF (Go)       │
-│  - 33 route groups   │                     │  - All routes        │
+│  - Some route groups │   (shrinking)       │  - All routes        │
 │  - Auth, config      │                     │  - Auth, config      │
-│  - K8s proxy         │                     │  - K8s proxy         │
-│  - WebSocket watch   │                     │  - WebSocket watch   │
-│  - MF proxy          │                     │  - MF proxy          │
+│  - MF proxy          │                     │  - K8s proxy         │
+│                      │                     │  - WebSocket watch   │
+│                      │                     │  - MF proxy          │
 ├──────────────────────┤                     ├──────────────────────┤
-│  Core BFF (Go)       │ ← NEW, growing      │                      │
-│  - healthcheck       │   (distributions/   │                      │
-│  - user, namespaces  │    core-bff/)       │                      │
+│  Core BFF (Go)       │ ← growing fast      │                      │
+│  - 30+ routes        │   (distributions/   │                      │
+│  - Dashboard config  │    core-bff/)       │                      │
 │  - K8s API proxy     │                     │                      │
 │  - WebSocket proxy   │                     │                      │
+│  - Connection types  │                     │                      │
+│  - Prometheus, NIM   │                     │                      │
+│  - Model serving     │                     │                      │
 ├──────────────────────┤                     ├──────────────────────┤
 │  gen-ai BFF (Go)     │                     │  gen-ai BFF (Go)     │
 │  model-reg BFF (Go)  │                     │  model-reg BFF (Go)  │
 │  maas BFF (Go)       │                     │  maas BFF (Go)       │
+│  agent-ops BFF (Go)  │                     │  agent-ops BFF (Go)  │
 │  ...                 │                     │  ...                 │
 └──────────────────────┘                     └──────────────────────┘
   Two languages + core BFF growing              One language, one pattern
@@ -77,12 +91,17 @@ The module BFFs (gen-ai, maas, automl, etc.) own **package-specific** logic -- L
 
 | Core BFF (dashboard-level) | Module BFFs (package-level) |
 |---|---|
-| Dashboard config, feature flags | LlamaStack models, MCP tools (gen-ai) |
+| Dashboard config, feature flags ✅ | LlamaStack models, MCP tools (gen-ai) |
 | K8s API passthrough proxy ✅ | Pipeline runs, S3 files (automl/autorag) |
-| User identity, namespace listing | Model subscriptions, API keys (maas) |
-| Connection testing (S3, URI, OCI) | Experiment tracking (mlflow) |
-| Module Federation proxy | Evaluation jobs (eval-hub) |
-| WebSocket watch proxy ✅ | Model versions, artifacts (model-registry) |
+| User identity, namespace listing ✅ | Model subscriptions, API keys (maas) |
+| Connection types CRUD ✅ | Experiment tracking (mlflow) |
+| Connection testing (S3, URI, OCI) ✅ | Evaluation jobs (eval-hub) |
+| Prometheus query proxy ✅ | Model versions, artifacts (model-registry) |
+| NIM integration ✅ | Agent runtime management (agent-ops) |
+| Model serving proxy ✅ | |
+| WebSocket watch proxy ✅ | |
+| Admin RBAC middleware ✅ | |
+| Module Federation proxy | |
 
 Think of it this way: if every team might need it, it belongs in the core BFF. If only one package uses it, it stays in that package's module BFF.
 
@@ -130,7 +149,7 @@ func (app *App) GetWidgetsHandler(w http.ResponseWriter, r *http.Request, _ http
 **3. Register the route** in `internal/api/app.go` inside the `Routes()` method:
 
 ```go
-apiRouter.GET(ApiVersion+"/widgets", app.GetWidgetsHandler)
+apiRouter.GET(APIVersion+"/widgets", app.GetWidgetsHandler)
 ```
 
 **4. Add to the OpenAPI spec** in `distributions/core-bff/bff/openapi/src/core-bff.yaml`.
@@ -138,7 +157,7 @@ apiRouter.GET(ApiVersion+"/widgets", app.GetWidgetsHandler)
 **5. Write tests** -- the core BFF uses `envtest` for K8s mocking and `httptest` for handler tests, just like the module BFFs.
 
 ::: tip Same Pattern, Different Location
-The only difference from a module BFF is the directory: `distributions/core-bff/bff/` instead of `packages/<name>/bff/`. The App struct, middleware chain, handler signature, WriteJSON helper, error envelope, and testing patterns are all identical to what you learned in this guide.
+The main difference from a module BFF is the directory: `distributions/core-bff/bff/` instead of `packages/<name>/bff/`. The App struct, middleware chain, handler signature, WriteJSON helper, error envelope, and testing patterns are similar, though the core BFF uses Go's standard `http.ServeMux` (with `{param}` syntax) instead of `httprouter` (with `:param` syntax), and routes are split across `routes_*.go` files instead of one `app.go`.
 :::
 
 ## How the Migration Works
@@ -147,13 +166,17 @@ The migration is **gradual, not a big-bang cutover**. Fastify endpoints move ove
 
 ### Phase 0: Lay the Foundation ✅ (done)
 
-The core BFF now exists at `distributions/core-bff/` in the monorepo. It handles `/healthcheck`, `/api/v1/user`, `/api/v1/namespaces`, and OpenAPI documentation endpoints. It also has inter-BFF communication infrastructure (`bffclient` package) for calling maas, gen-ai, model-registry, and mlflow BFFs. Additionally, the K8s API proxy (`/api/k8s/*`) and WebSocket proxy (`/wss/k8s/*`) are already implemented, along with SSRF protection and TLS infrastructure for mTLS to the K8s API server.
+The core BFF now exists at `distributions/core-bff/` in the monorepo. It handles healthcheck, user, namespaces, and OpenAPI documentation endpoints. It also has inter-BFF communication infrastructure (`bffclient` package) for calling maas, gen-ai, model-registry, and mlflow BFFs. Additionally, the K8s API proxy (`/api/k8s/*`) and WebSocket proxy (`/wss/k8s/*`) are already implemented, along with SSRF protection and TLS infrastructure for mTLS to the K8s API server.
 
-### Phases 1-2: Audit and Extend
+### Phases 1-2: Audit and Extend ✅ (done)
 
-Before migrating Fastify routes, the team audits all 33 route categories and documents their request/response contracts. This produces a migration matrix: which endpoints move when, who owns them, and what the priority order is.
+The team audited the 33 Fastify route categories and extended the core BFF with infrastructure for the migration. All three planned items are now implemented:
 
-The core BFF also gets extended with infrastructure specific to the migration -- admin RBAC middleware, an HTTP reverse proxy framework, and a K8s pass-through resource handler.
+- **Admin RBAC middleware** -- `secureAdminRoute` in the route registration, gating admin-only endpoints
+- **HTTP reverse proxy framework** -- `internal/proxy/` package with `NewReverseProxy` factory supporting K8s API, WebSocket, and model serving proxies
+- **K8s pass-through resource handler** -- the K8s proxy at `/api/k8s/*` handles all HTTP methods
+
+Additionally, significant route migration has already happened: dashboard config CRUD, cluster settings, components, status, connection types (full CRUD), Prometheus query proxy, NIM integration, model serving proxy, and namespace management are all implemented in the core BFF.
 
 ### Phases 3-5: Move the Routes
 
@@ -168,7 +191,7 @@ Fastify endpoints migrate in three waves of increasing complexity:
 Each endpoint follows the same pattern: implement the Go handler, write contract tests, validate with the E2E suite, switch traffic, remove the Fastify route.
 
 ::: info Ahead of Schedule
-The K8s API passthrough proxy -- the first "Simple" wave item -- is already implemented in the core BFF (`/api/k8s/*` and `/wss/k8s/*`), ahead of the formal migration waves. This means the infrastructure for proxying all HTTP methods and WebSocket watch streams to the K8s API server is ready for use.
+Many items from the Simple and Moderate waves are already implemented in the core BFF, ahead of the formal migration plan. The K8s API proxy (`/api/k8s/*`, `/wss/k8s/*`), dashboard config, cluster settings, connection types, Prometheus queries, NIM integration, and model serving proxy are all live. The migration is progressing faster than the original wave plan.
 :::
 
 ### Phases 6-8: The Hard Parts and Finish Line

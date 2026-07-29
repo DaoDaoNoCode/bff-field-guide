@@ -2,7 +2,7 @@
 
 > **The outbound connections** -- how the BFF talks to Kubernetes, LlamaStack, Pipeline Servers, and other external services.
 
-Integrations are how the BFF talks to the outside world. Your React components call `fetch()` to talk to the BFF. The BFF, in turn, calls out to other services -- Kubernetes for RBAC and resource management, LlamaStack for AI models, Pipeline Server for ML pipelines, S3 for file storage. The code that manages these outbound connections lives in `internal/integrations/`.
+Integrations are how the BFF talks to the outside world. Your React components call `fetch()` to talk to the BFF. The BFF, in turn, calls out to other services -- Kubernetes for RBAC and resource management, LlamaStack for AI inference, MCP servers for tool access, MLflow for experiment tracking, NeMo Guardrails for content moderation, and other BFFs for cross-feature communication. The code that manages these outbound connections lives in `internal/integrations/`.
 
 If you've ever written a service class in TypeScript that wraps `fetch()` calls to an external API, you already understand the concept. The BFF's integration clients do the exact same thing, with the addition of Kubernetes awareness (auth tokens, service discovery, CA certificates).
 
@@ -40,31 +40,64 @@ The Go version does the same thing. Let's build up to it.
 ## What's in internal/integrations/
 
 ```
-bff/internal/integrations/
-├── http.go                    # Shared error types (HTTPError, ErrorResponse)
+bff/internal/integrations/          (gen-ai BFF -- other BFFs differ)
+├── http.go                    # HTTPClientInterface, HTTPError, ErrorResponse
+├── types.go                   # RequestIdentity, BearerToken
 ├── kubernetes/                # Kubernetes API client
-│   ├── types.go               # RequestIdentity, ServiceDetails
-│   ├── factory.go             # KubernetesClientFactory interface + implementations
 │   ├── client.go              # KubernetesClientInterface
-│   ├── internal_k8s_client.go # Uses service account (internal auth)
+│   ├── factory.go             # KubernetesClientFactory interface + TokenClientFactory
 │   ├── token_k8s_client.go    # Uses user token (user_token auth)
-│   └── k8smocks/              # Mock implementations
-├── pipelineserver/            # Pipeline Server HTTP client
-│   ├── client.go              # PipelineServerClientInterface
-│   ├── client_factory.go      # Factory for creating clients
-│   └── psmocks/               # Mock implementations
-├── s3/                        # S3-compatible storage client
-│   ├── client.go
-│   └── s3mocks/
-└── httpclient/                # Generic HTTP client wrapper (some BFFs)
-    └── client.go
+│   ├── errors.go              # K8s-specific error helpers
+│   ├── agent_profiles.go      # AgentProfile CRUD via K8s resources
+│   ├── llamastack_config.go   # LlamaStack config read from K8s ConfigMaps
+│   ├── nemo_guardrails.go     # NeMo Guardrails resource management
+│   ├── otel_config_manager.go # OpenTelemetry collector configuration
+│   ├── vector_stores_test.go  # Vector store tests
+│   ├── k8smocks/              # Mock implementations (envtest-based)
+│   ├── pgvector/              # PgVector provisioning (Deployments, PVCs)
+│   └── testdata/              # Test fixtures
+├── llamastack/                # LlamaStack AI service HTTP client
+│   ├── llamastack_client.go   # Client implementation
+│   ├── llamastack_client_factory.go
+│   ├── llamastack_datatypes.go
+│   ├── errors.go
+│   └── lsmocks/               # Mock implementations
+├── mcp/                       # Model Context Protocol client
+│   ├── client.go              # MCPClientInterface
+│   ├── simple_client.go       # HTTP-based MCP client
+│   ├── factory.go             # Factory for creating MCP clients
+│   ├── transport_factory.go   # MCP transport layer setup
+│   ├── config.go              # MCP server configuration
+│   ├── errors.go
+│   └── mcpmocks/              # Mock implementations
+├── mlflow/                    # MLflow experiment tracking client
+│   ├── client.go              # Client interface
+│   ├── factory.go             # Factory
+│   ├── mlflow_cr.go           # MLflow CR discovery
+│   └── mlflowmocks/           # Mock implementations
+├── nemo/                      # NeMo Guardrails API client
+│   ├── nemo_client.go         # NemoGuardrailsClient
+│   ├── nemo_client_factory.go # Factory
+│   ├── types.go               # Request/response types
+│   └── nemomocks/             # Mock implementations
+├── bffclient/                 # Inter-BFF communication client
+│   ├── client.go              # BFFClientInterface (Call, IsAvailable)
+│   ├── config.go              # BFF discovery configuration
+│   ├── factory.go             # Factory
+│   ├── errors.go
+│   ├── middleware.go           # Middleware to attach BFF client to context
+│   └── bffmocks/              # Mock implementations
+└── externalmodels/            # External model providers (OpenAI-compatible)
+    ├── client.go              # Chat completion & audio transcription
+    └── errors.go
 ```
 
 ::: info HTTP Client Location Varies
-Not all BFFs organize their HTTP client code the same way:
-- Some BFFs (e.g., maas) have a dedicated `httpclient/` package under `integrations/`
-- Others (e.g., gen-ai) have `http.go` at the `integrations/` root level
-- In gen-ai, each service gets its own subdirectory (`llamastack/`, `mcp/`, `mlflow/`, etc.) with its own client code
+Not all 8 BFFs organize their HTTP client code the same way:
+- Some BFFs (e.g., maas, agent-ops, eval-hub, model-registry) have a dedicated `httpclient/` package under `integrations/`
+- Others (e.g., gen-ai) have `http.go` at the `integrations/` root level providing a shared `HTTPClientInterface`
+- In gen-ai, each upstream service gets its own subdirectory (`llamastack/`, `mcp/`, `mlflow/`, `nemo/`, etc.) with its own client code
+- The automl and autorag BFFs have `pipelineserver/` and `s3/` subdirectories for their specific upstream services
 
 The principle is the same across all BFFs, but the exact directory layout may differ.
 :::
@@ -93,15 +126,19 @@ type KubernetesClientFactory interface {            // Defines what a factory mu
 
 // Client does the actual work -- the "how" (interface)
 type KubernetesClientInterface interface {          // Defines what a client must do
-    CanListDSPipelineApplications(                 // Check RBAC permissions
-        ctx context.Context,
-        identity *RequestIdentity,
-        namespace string) (bool, error)            // Returns allowed or error
     GetNamespaces(                                 // List namespaces the user can see
         ctx context.Context,
         identity *RequestIdentity) (
-        []models.NamespaceModel, error)            // Returns namespaces or error
-    // ... more methods
+        []corev1.Namespace, error)                 // Returns K8s Namespace objects or error
+    CanListNamespaces(                             // Check if user can list namespaces
+        ctx context.Context,
+        identity *RequestIdentity) (bool, error)   // SSAR check -- returns allowed or error
+    IsClusterAdmin(                                // Check if user has cluster-admin power
+        ctx context.Context,
+        identity *RequestIdentity) (bool, error)   // SSAR with wildcard verb+resource
+    GetOGXServers(...)                             // List OGXServer custom resources
+    InstallOGXServer(...)                          // Create an OGXServer + dependencies
+    // ... ~20 more methods (ConfigMaps, Secrets, external models, guardrails, agent profiles)
 }
 ```
 
@@ -121,7 +158,7 @@ if cfg.MockK8sClient {                             // Check the --mock-k8s-clien
 } else {                                           // Real mode
     // Real: uses in-cluster or kubeconfig credentials
     k8sFactory, err = kubernetes.NewKubernetesClientFactory( // Create real factory
-        cfg, logger)
+        cfg, logger, rootCAs)
 }
 ```
 
@@ -136,49 +173,52 @@ This is dependency injection through interfaces. Same concept as injecting mock 
 
 ## The Kubernetes Client
 
-The K8s client is the most important integration. It handles SubjectAccessReview (see [Auth](./auth)), listing namespaces, reading resources (ConfigMaps, Secrets, custom resources), and creating/updating resources.
+The K8s client is the most important integration. It handles SelfSubjectAccessReview (SSAR) for RBAC checks (see [Auth](./auth)), listing namespaces, reading resources (ConfigMaps, Secrets, custom resources), managing OGXServer installations, external model providers, NeMo Guardrails, agent profiles, and more.
 
-### Two Client Types
+### The Token Client
+
+The gen-ai BFF currently supports one auth method: **user token auth** via `TokenClientFactory`. (Internal/service-account auth is planned but not yet implemented -- there is a TODO in `factory.go`.)
 
 | Type | Factory | When Used |
 |---|---|---|
-| `StaticClientFactory` | `NewStaticClientFactory()` | Internal auth -- BFF uses its own service account |
 | `TokenClientFactory` | `NewTokenClientFactory()` | User token auth -- BFF uses the user's token |
 
-With **internal auth**, the BFF talks to K8s using its own pod's service account. It checks permissions through SubjectAccessReview (asking K8s "can this user do X?"):
+With user token auth, the BFF checks permissions through **SelfSubjectAccessReview** (SSAR). Unlike a regular SubjectAccessReview (SAR), an SSAR asks "can **I** do X?" -- the "I" is whoever's token is on the request. No `User` or `Groups` fields are needed because the API server infers them from the bearer token:
 
 ```go
-// Internal auth: BFF asks K8s "can alice list pipelines in my-project?"
-review := &authv1.SubjectAccessReview{             // Build the SAR request
-    Spec: authv1.SubjectAccessReviewSpec{          // What to check
-        User:   "alice@example.com",               // The user to check
-        Groups: []string{"team-alpha"},            // Their groups
+// SSAR: the user's own token asks K8s "can I list OGXServers in my-project?"
+sar := &authv1.SelfSubjectAccessReview{            // Build the SSAR request
+    Spec: authv1.SelfSubjectAccessReviewSpec{      // What to check
         ResourceAttributes: &authv1.ResourceAttributes{ // The action
-            Namespace: "my-project",               // Where
             Verb:      "list",                     // What action
-            Resource:  "datasciencepipelinesapplications", // What resource
+            Group:     "ogx.io",                   // API group
+            Resource:  "ogxservers",               // What resource
+            Namespace: namespace,                  // Where
         },
     },
 }
+// No User/Groups fields -- the bearer token on the request tells K8s who is asking
 ```
 
-With **user token auth**, the BFF creates a K8s client using the user's Bearer token, so all API calls are naturally scoped to the user's permissions:
+The BFF creates a K8s client using the user's Bearer token, so all API calls are naturally scoped to the user's permissions:
 
 ```go
 func (f *TokenClientFactory) GetClient(            // Create a K8s client for a specific user
     ctx context.Context,                           // Request context (has user identity)
 ) (KubernetesClientInterface, error) {             // Returns the client or error
-    identity, _ := ctx.Value(                      // Get the user's identity from context
-        constants.RequestIdentityKey,
-    ).(*RequestIdentity)
+    identityVal := ctx.Value(                      // Get the user's identity from context
+        constants.RequestIdentityKey)
 
-    config := rest.CopyConfig(f.baseConfig)        // Copy the base K8s config
-    config.BearerToken = identity.Token            // Set the user's token on the copy
+    identity, ok := identityVal.(*integrations.RequestIdentity)
+    if !ok || identity.Token == "" {               // Validate the identity
+        return nil, fmt.Errorf("invalid or missing identity token")
+    }
 
-    clientset, err := kubernetes.NewForConfig(config) // Create a K8s client using that token
-    // This client operates AS the user             // All API calls have the user's permissions
-    return NewTokenKubernetesClient(               // Wrap in our client interface
-        clientset, f.logger), nil
+    // Create a K8s client using the user's token
+    // This client operates AS the user -- all API calls have the user's permissions
+    return newTokenKubernetesClient(               // Wrap in our client interface
+        identity.Token, f.Logger, f.Config,
+        f.SAClient, f.OTelConfigManager)
 }
 ```
 
@@ -186,7 +226,7 @@ With token auth, the BFF never has more power than the user. Every K8s call goes
 
 ## HTTP Clients for Upstream Services
 
-Beyond Kubernetes, BFFs call upstream services like LlamaStack, Pipeline Server, MLflow, etc. These use standard HTTP clients.
+Beyond Kubernetes, BFFs call upstream services like LlamaStack, MCP servers, MLflow, NeMo Guardrails, Pipeline Server, etc. These use standard HTTP clients. The gen-ai BFF also has a `bffclient/` package for inter-BFF communication and an `externalmodels/` package for OpenAI-compatible model providers.
 
 Let's build up a typical integration client, starting simple. The following examples are from the **automl BFF's** `PipelineServer` client, but the pattern is identical across all BFFs:
 
@@ -420,7 +460,7 @@ The `internal/integrations/` directory contains clients for every external servi
 
 ::: info See Also
 - [Middleware Chain](./middleware) -- how `AttachClient` middleware creates and injects clients
-- [Authentication & RBAC](./auth) -- the Kubernetes client's role in SubjectAccessReview
+- [Authentication & RBAC](./auth) -- the Kubernetes client's role in SelfSubjectAccessReview
 - [The App Struct & Routes](./app-and-routes) -- where factories are initialized in `NewApp()`
 - [Advanced Patterns](./advanced-patterns) -- inter-BFF communication and concurrent service calls
 :::

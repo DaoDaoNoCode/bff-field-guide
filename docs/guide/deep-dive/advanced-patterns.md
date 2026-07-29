@@ -106,14 +106,15 @@ type BFFClientInterface interface {
 
     IsAvailable(ctx context.Context) bool          // Health check: is the target reachable?
     GetBaseURL() string                            // The target BFF's URL
-    GetTarget() BFFTarget                          // Which BFF ("maas", "model-registry", etc.)
+    GetTarget() BFFTarget                          // Which BFF: maas(:8243), gen-ai(:8143),
+                                                   //   model-registry(:8043), or mlflow(:8343)
 }
 ```
 
-And here's how a handler uses it. From `bff_maas_tokens_handler.go`:
+And here's how a handler uses it. From `maas_tokens_handler.go`:
 
 ```go
-func (app *App) BFFMaaSIssueTokenHandler(
+func (app *App) MaaSIssueTokenHandler(
     w http.ResponseWriter, r *http.Request, _ httprouter.Params,
 ) {
     ctx := r.Context()
@@ -169,6 +170,8 @@ func AttachBFFClient(factory BFFClientFactory, target BFFTarget,
 ) func(next httprouter.Handle) httprouter.Handle {
     return func(next httprouter.Handle) httprouter.Handle {
         return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+            ctx := r.Context()                         // Get context from the request
+
             // Extract the user's auth token from context
             var authToken string
             if identity, ok := ctx.Value(
@@ -199,50 +202,40 @@ Both BFFs use the same error envelope format (`{"error": {"code": "...", "messag
 
 When a handler needs data from multiple independent sources, goroutines let you call them in parallel instead of sequentially. The gen-ai BFF uses this pattern extensively for async output moderation -- checking guardrail compliance on chunks of streamed text while continuing to receive new tokens.
 
-Here's the fundamental pattern, distilled to its simplest form:
+Here's the fundamental pattern, simplified from `token_k8s_client.go`:
 
 ```go
-func (app *App) DashboardHandler(
-    w http.ResponseWriter, r *http.Request, _ httprouter.Params,
-) {
-    ctx := r.Context()
+func (kc *Client) GetAAModels(
+    ctx context.Context, namespace string,
+) ([]models.AAModel, error) {
+    g, gCtx := errgroup.WithContext(ctx)           // Create an error group tied to context
+    var fromInfSvc, fromLLMInfSvc, fromExternal []models.AAModel
 
-    // Results and errors from each goroutine
-    var models []Model
-    var prompts []Prompt
-    var modelsErr, promptsErr error
+    g.Go(func() (err error) {                      // Goroutine 1: fetch inference service models
+        fromInfSvc, err = kc.getAAModelsFromInferenceService(gCtx, namespace, labelSelector)
+        return err                                 // errgroup collects the error for you
+    })
 
-    var wg sync.WaitGroup                          // Coordination primitive
-    wg.Add(2)                                      // "I'm launching 2 goroutines"
+    g.Go(func() (err error) {                      // Goroutine 2: fetch LLM inference service models
+        fromLLMInfSvc, err = kc.getAAModelsFromLLMInferenceService(gCtx, namespace, labelSelector)
+        return err
+    })
 
-    go func() {                                    // Goroutine 1: fetch models
-        defer wg.Done()                            // Decrements counter when done (even on panic)
-        models, modelsErr = app.llamaClient.ListModels(ctx)
-    }()
+    g.Go(func() (err error) {                      // Goroutine 3: fetch external models
+        fromExternal, err = kc.getExternalModels(gCtx, namespace)
+        return err
+    })
 
-    go func() {                                    // Goroutine 2: fetch prompts
-        defer wg.Done()                            // Decrements counter when done
-        prompts, promptsErr = app.mlflowClient.ListPrompts(ctx)
-    }()
-
-    wg.Wait()                                      // Block until both goroutines complete
-
-    // Now check errors -- both calls are done
-    if modelsErr != nil {
-        app.serverErrorResponse(w, r, modelsErr)
-        return
-    }
-    if promptsErr != nil {
-        app.serverErrorResponse(w, r, promptsErr)
-        return
+    if err := g.Wait(); err != nil {               // Block until all goroutines complete
+        return nil, err                            // If ANY goroutine failed, return the first error
     }
 
-    // Both results are ready
-    app.WriteJSON(w, http.StatusOK, combined, nil)
+    // All results are ready -- combine and return
+    return append(append(fromInfSvc, fromLLMInfSvc...), fromExternal...), nil
 }
 ```
 
-If you know `Promise.all()` in JavaScript, you already understand this. The `sync.WaitGroup` is Go's coordination primitive: `Add(2)` says "two things to wait for," `Done()` decrements the counter, and `Wait()` blocks until the counter hits zero.
+If you know `Promise.all()` in JavaScript, you already understand this. The `errgroup` package (from `golang.org/x/sync/errgroup`) is Go's standard tool for structured concurrency: `g.Go()` launches a goroutine, and `g.Wait()` blocks until all goroutines complete, returning the first error encountered. Unlike a bare `sync.WaitGroup`, errgroup also cancels the shared context (`gCtx`) when any goroutine fails, so the remaining goroutines can exit early instead of doing wasted work.
 
 In the real codebase, the `async_moderation.go` file shows a more sophisticated version. The `ModerateChunkAsync` method fires off goroutines to check text chunks against NeMo guardrails while the stream continues:
 
@@ -290,7 +283,7 @@ If calls depend on each other (e.g., you need the OGXServer URL before calling L
 :::
 
 ::: tip Key Takeaway
-These three patterns -- SSE streaming, inter-BFF calls, and goroutines -- build on the same handler foundation you already know. SSE replaces `WriteJSON` with direct writes and `Flusher.Flush()`. Inter-BFF uses the same factory-and-interface pattern as upstream service clients, with the user's token forwarded. Goroutines let you call multiple services in parallel using `sync.WaitGroup`, with `sync.Mutex` protecting shared state. Start with the standard request-response pattern; reach for these when you need them.
+These three patterns -- SSE streaming, inter-BFF calls, and goroutines -- build on the same handler foundation you already know. SSE replaces `WriteJSON` with direct writes and `Flusher.Flush()`. Inter-BFF uses the same factory-and-interface pattern as upstream service clients, with the user's token forwarded. Goroutines let you call multiple services in parallel using `errgroup`, with `sync.Mutex` protecting shared state. Start with the standard request-response pattern; reach for these when you need them.
 :::
 
 ::: info See Also

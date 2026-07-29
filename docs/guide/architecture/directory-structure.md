@@ -27,10 +27,10 @@ bff/                                     # root of the BFF -- everything lives h
 │   │   └── helpers.go                   #     shared handler utilities
 │   │
 │   ├── config/                          #   configuration -- like your env.ts
-│   │   └── config.go                    #     EnvConfig struct with all settings
+│   │   └── environment.go               #     EnvConfig struct with all settings
 │   │
 │   ├── constants/                       #   constants -- like your constants.ts
-│   │   └── paths.go                     #     API path constants, header keys
+│   │   └── api_constants.go             #     API path constants, header keys
 │   │
 │   ├── integrations/                    #   external clients -- like your api/ services
 │   │   ├── http.go                      #     generic HTTP client helper (shared)
@@ -49,9 +49,6 @@ bff/                                     # root of the BFF -- everything lives h
 │   │   ├── mlflow/                      #     MLflow client
 │   │   │   └── mlflowmocks/             #       mock MLflow client (co-located)
 │   │   │
-│   │   ├── maas/                        #     MaaS inter-BFF client
-│   │   │   └── maasmocks/               #       mock MaaS client (co-located)
-│   │   │
 │   │   ├── nemo/                        #     NeMo Guardrails client
 │   │   │   └── nemomocks/               #       mock NeMo client (co-located)
 │   │   │
@@ -66,11 +63,12 @@ bff/                                     # root of the BFF -- everything lives h
 │   │   └── kubernetes.go                #     K8s resource type definitions
 │   │
 │   ├── repositories/                    #   business logic -- like your data hooks
-│   │   └── llamastack.go               #     domain logic, data transformation
+│   │   └── llamastack_distribution.go   #     domain logic, data transformation
 │   │
 │   ├── services/                        #   service orchestration layer
 │   ├── helpers/                         #   shared helper functions
 │   ├── cache/                           #   caching layer
+│   ├── telemetry/                       #   OpenTelemetry tracing setup
 │   ├── types/                           #   additional type definitions
 │   └── testutil/                        #   shared test utilities
 │
@@ -111,7 +109,7 @@ func main() {                              // the entry point -- Go runs this fu
     cfg := config.EnvConfig{}              // create an empty config struct
 
     flag.IntVar(&cfg.Port, "port", 8080, "API server port")          // --port flag, default 8080
-    flag.StringVar(&cfg.AuthMethod, "auth-method", "internal", "Auth method") // --auth-method flag
+    flag.StringVar(&cfg.AuthMethod, "auth-method", "user_token", "Auth method") // --auth-method flag
     flag.BoolVar(&cfg.MockK8sClient, "mock-k8s-client", false, "Use mock K8s") // --mock-k8s-client flag
     flag.Parse()                           // parse all the flags from the command line
 
@@ -508,7 +506,7 @@ This spec is used by the contract testing framework (`@odh-dashboard/contract-te
 ```
 module github.com/opendatahub-io/gen-ai          # module path -- like "name" in package.json
 
-go 1.24                                           # minimum Go version -- like "engines" in package.json
+go 1.26                                           # minimum Go version -- like "engines" in package.json
 
 require (                                          # dependencies -- like "dependencies" in package.json
     github.com/julienschmidt/httprouter v1.3.0    # HTTP router (like Express)
@@ -581,7 +579,7 @@ The biggest difference: in Go, test files live **next to** the code they test, n
 
 ## Which Directories Vary Between BFFs?
 
-Most of the structure is consistent across all seven BFFs, but there are differences:
+Most of the structure is consistent across all eight BFFs, but there are differences:
 
 | Directory | Always Present | What Varies |
 |---|---|---|

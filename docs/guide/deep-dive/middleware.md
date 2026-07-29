@@ -222,8 +222,8 @@ func (app *App) EnableCORS(                        // Global middleware
         AllowCredentials: true,                    // Allow cookies/auth headers
         AllowedMethods:   []string{                // Allowed HTTP methods
             "GET", "PUT", "POST", "PATCH", "DELETE"},
-        AllowedHeaders:   []string{                // Allowed request headers
-            "kubeflow-userid", "kubeflow-groups"}, // The Kubeflow auth headers
+        AllowedHeaders:   []string{                // Allowed request headers (varies by BFF)
+            "kubeflow-userid", "kubeflow-groups"}, // Some BFFs (e.g., gen-ai) use an empty list instead
     })
     return c.Handler(next)                         // Wrap the next handler with CORS
 }
@@ -328,7 +328,7 @@ func (app *App) AttachNamespace(                   // Route-level middleware
 Performs an access review (SAR or SSAR, depending on the auth method) to check if the user has permission:
 
 ```go
-func (app *App) RequireAccessToPipelineServers(    // Route-level middleware
+func (app *App) RequireAccessToService(            // Route-level middleware (name varies by BFF)
     next func(http.ResponseWriter, *http.Request, httprouter.Params),
 ) httprouter.Handle {                              // Returns httprouter handler
     return func(                                   // The wrapper function

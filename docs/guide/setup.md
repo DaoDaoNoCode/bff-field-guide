@@ -17,7 +17,7 @@ brew install go
 That's it. No build-from-source, no downloading tarballs, no configuring paths. Homebrew handles everything.
 
 ::: tip Already have Go installed?
-If you installed Go a while ago, make sure you're on version 1.24 or later. The ODH Dashboard BFFs require it. Run `brew upgrade go` to get the latest version.
+If you installed Go a while ago, make sure you're on version 1.26 or later. The ODH Dashboard BFFs require it. Run `brew upgrade go` to get the latest version.
 :::
 
 ### Linux
@@ -26,8 +26,8 @@ On Linux, you'll download the official binary from Go's website. Here's the proc
 
 ```bash
 # Download the Go binary archive
-# (check go.dev/dl for the latest version -- 1.24.3 is current as of writing)
-wget https://go.dev/dl/go1.24.3.linux-amd64.tar.gz
+# (check go.dev/dl for the latest version -- 1.26.0 is current as of writing)
+wget https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
 ```
 
 That command downloads a compressed archive containing the entire Go toolchain. Think of it like downloading a `.zip` of Node.js, except it includes everything -- compiler, formatter, test runner, the works.
@@ -41,7 +41,7 @@ This cleans out any old version. If you've never installed Go before, this comma
 
 ```bash
 # Extract the archive to /usr/local
-sudo tar -C /usr/local -xzf go1.24.3.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
 ```
 
 This unpacks Go into `/usr/local/go/`, which is where Linux conventions say it should live.
@@ -70,10 +70,10 @@ go version
 You should see something like:
 
 ```
-go1.24.3 darwin/arm64
+go1.26.0 darwin/arm64
 ```
 
-If you're on an Intel Mac, it'll say `darwin/amd64`. On Linux, `linux/amd64`. The important part is that the version starts with `1.24` or later.
+If you're on an Intel Mac, it'll say `darwin/amd64`. On Linux, `linux/amd64`. The important part is that the version starts with `1.26` or later.
 
 ::: danger If you see "go: command not found"
 This means your shell can't find the `go` binary. Here's how to fix it:
@@ -98,7 +98,7 @@ go env GOROOT
 This prints where Go itself is installed:
 
 ```
-/opt/homebrew/Cellar/go/1.24.3/libexec    # macOS with Homebrew
+/opt/homebrew/Cellar/go/1.26.0/libexec    # macOS with Homebrew
 # or
 /usr/local/go                              # Linux
 ```
@@ -122,7 +122,7 @@ Think of `GOPATH` like a global `node_modules`. When you download a dependency, 
 <div class="checkpoint">
 
 #### Checkpoint: Go is installed
-Run `go version` in your terminal. If you see `go1.24` or later, you're good. If not, revisit the installation steps above before continuing.
+Run `go version` in your terminal. If you see `go1.26` or later, you're good. If not, revisit the installation steps above before continuing.
 
 </div>
 
@@ -258,7 +258,8 @@ If you prefer a single folder workspace, add this to your `settings.json`:
     "+packages/automl/bff",
     "+packages/maas/bff",
     "+packages/autorag/bff",
-    "+packages/eval-hub/bff"
+    "+packages/eval-hub/bff",
+    "+packages/agent-ops/bff"
   ]
 }
 ```
@@ -350,7 +351,7 @@ You should see:
 ```
 module hello-go
 
-go 1.24
+go 1.26
 ```
 
 That's it. Two lines. Compare that to a `package.json` with its name, version, description, scripts, dependencies, devDependencies, engines... Go's philosophy is "less is more."
@@ -880,8 +881,8 @@ func TestAdd(t *testing.T) {             // Test functions start with Test
 
 Yeah, there's no `describe`/`it`/`expect`. Go's philosophy is that the standard library's `testing` package is enough, and adding a framework on top would just be extra complexity. It feels bare-bones at first, but you get used to it fast. We'll cover testing patterns in depth later, including table-driven tests (Go's answer to parameterized tests).
 
-::: tip No Framework Needed (Really)
-Go's standard library `testing` package is what the Go team uses to test Go itself. It's what the Kubernetes project uses. It's what almost every Go project uses. There _are_ assertion libraries like `testify` if you want `assert.Equal(t, expected, actual)` syntax, but they're entirely optional. The ODH Dashboard BFFs use the standard library approach.
+::: tip testify Is the Standard in ODH Dashboard
+While Go's standard library `testing` package is sufficient on its own, the ODH Dashboard BFFs all use `testify` (`github.com/stretchr/testify`) for assertion helpers like `assert.Equal(t, expected, actual)` and `require.NoError(t, err)`. The gen-ai BFF additionally uses the Ginkgo/Gomega BDD framework. When writing tests for a BFF, follow the testing style already used in that package.
 :::
 
 ### go mod tidy -- Clean Up Dependencies
@@ -924,7 +925,7 @@ This creates a `go.mod` file with just two lines:
 
 ```
 module hello-go            // The module name (like "name" in package.json)
-go 1.24.3                  // The minimum Go version required
+go 1.26.0                  // The minimum Go version required
 ```
 
 At this point there's no `go.sum` file yet — it doesn't exist until you add a dependency.
@@ -952,7 +953,7 @@ This does three things at once:
 
 ```
 module hello-go
-go 1.24.3
+go 1.26.0
 
 require github.com/julienschmidt/httprouter v1.3.0   // Added by go mod tidy
 ```
@@ -1014,7 +1015,7 @@ It's almost suspiciously simple. If you're thinking "where's the rest of the con
 
 You're ready for the next chapter if you can answer "yes" to all of these:
 
-- [ ] `go version` prints **1.24** or later
+- [ ] `go version` prints **1.26** or later
 - [ ] `go run main.go` starts your HTTP server and you can curl it
 - [ ] VS Code shows syntax highlighting and autocomplete in `.go` files
 - [ ] You understand that `go.mod` is your `package.json`

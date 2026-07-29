@@ -167,7 +167,7 @@ Now that you understand each layer, here is the full picture with all the detail
 |   React App (PatternFly v6 UI)                                    |
 |   - Main dashboard (host)                                         |
 |   - Federated modules loaded via Module Federation                |
-|     (gen-ai, model-registry, maas, automl, autorag, ...)         |
+|     (gen-ai, model-registry, maas, automl, autorag, agent-ops, ...)|
 +-----------------------------------+------------------------------+
                                     |
                               fetch('/gen-ai/api/v1/models')
@@ -370,7 +370,7 @@ Here is how it works:
               |        +---------+               |
               |               |                  |
          BFF (Go)        BFF (Go)           BFF (Go)
-         :8080           :4000              :8081
+         :8080           :4000              :4000
 ```
 
 Here is the key point: each remote package exposes an `extensions` module that defines navigation items (sidebar links), routes (URL paths), and area flags (feature gates). The host dynamically loads these extensions at runtime and integrates them into the unified dashboard experience. This is why you see navigation items for Gen AI, Model Registry, etc., even though they are developed in separate packages.
@@ -429,7 +429,7 @@ Backend (localhost:8080)
   |
   +-- proxies /gen-ai/api/* to localhost:8080 (gen-ai BFF)
   +-- proxies /model-registry/api/* to localhost:4000 (model-registry BFF)
-  +-- proxies /maas/api/* to localhost:8081 (maas BFF)
+  +-- proxies /maas/api/* to localhost:4000 (maas BFF)
   ...
 ```
 
@@ -454,10 +454,12 @@ Browser (user opens the dashboard URL)
   |     |     +-- proxies /_mf/* to BFF containers  <- Module Federation assets
   |     |     +-- proxies /{name}/api/* to BFFs     <- API requests
   |     |
+  |     +-- Container: core BFF (:8943)              <- core infrastructure BFF
   |     +-- Container: gen-ai BFF (:8143)           <- sidecar container, same pod
-  |     +-- Container: model-registry BFF           <- sidecar container, same pod
-  |     +-- Container: maas BFF                     <- sidecar container, same pod
-  |     +-- Container: mlflow BFF                   <- sidecar container, same pod
+  |     +-- Container: model-registry BFF (:8043)   <- sidecar container, same pod
+  |     +-- Container: maas BFF (:8243)             <- sidecar container, same pod
+  |     +-- Container: mlflow BFF (:8343)           <- sidecar container, same pod
+  |     +-- Container: agent-ops BFF (:8843)        <- sidecar container, same pod
   |     +-- ...                                     <- one sidecar per package
   ...
 ```
@@ -466,17 +468,18 @@ In production, the architecture simplifies. There is no Webpack dev server. The 
 
 ## Development Port Reference
 
-Each BFF package uses specific ports during local development. These ports are declared in the package's `package.json` under `module-federation.local.port` (frontend) and `bffConfig.port` (BFF):
+Each BFF package uses specific ports during local development. Frontend ports are declared in `module-federation.local.port` in `packages/<name>/package.json`. BFF ports default to the `-port` flag in each BFF's `cmd/main.go` (or the `PORT` variable in the BFF's `Makefile`):
 
 | Package | Frontend Port | BFF Port | Proxy Path |
 |---|---|---|---|
 | **gen-ai** | 9102 | 8080 | `/gen-ai/api` |
 | **model-registry** | 9100 | 4000 | `/model-registry/api` |
-| **maas** | 9104 | 8081 | `/maas/api` |
+| **maas** | 9104 | 4000 | `/maas/api` |
 | **automl** | 9108 | 4003 | `/automl/api` |
-| **autorag** | 9107 | 4001 | `/autorag/api` |
-| **eval-hub** | 9106 | 4002 | `/eval-hub/api` |
-| **mlflow** | 9110 | 4020 | `/_bff/mlflow/api` |
+| **autorag** | 9107 | 4000 | `/autorag/api` |
+| **eval-hub** | 9106 | 4000 | `/eval-hub/api` |
+| **mlflow** | 9110 | 4000 | `/_bff/mlflow/api` |
+| **agent-ops** | 9111 | 4000 | `/agent-ops/api` |
 
 ::: warning gen-ai BFF Port Collision
 The gen-ai BFF defaults to port **8080**, which is the same port the Fastify backend uses. In local development, the dev proxy handles routing so both can coexist, but if you need to run the gen-ai BFF standalone alongside the Fastify backend, you will need to start one of them on a different port (e.g., `--port 8090`).
@@ -495,7 +498,7 @@ Notice that mlflow uses `/_bff/mlflow/api` instead of `/mlflow/api`. This is bec
 | Setting | Location |
 |---|---|
 | Frontend dev port | `module-federation.local.port` in `packages/<name>/package.json` |
-| BFF dev port | `bffConfig.port` in `packages/<name>/package.json` |
+| BFF dev port | `-port` flag default in `cmd/main.go` or `PORT` in BFF `Makefile` |
 | Proxy path and rewrite | `module-federation.proxy` in `packages/<name>/package.json` |
 | Production service port | `service.port` in `manifests/modular-architecture/federation-configmap.yaml` |
 | Port conflict validation | `npm run validate:ports` from the repo root |

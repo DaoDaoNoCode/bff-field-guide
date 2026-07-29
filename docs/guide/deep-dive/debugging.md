@@ -17,14 +17,13 @@ The Go equivalent uses structured logging:
 
 ```go
 // Go -- same idea, structured key-value pairs
-logger := helper.GetContextLoggerFromReq(r)          // Get the request-scoped logger
-logger.Debug("hit the handler",                      // Message first
+app.logger.Debug("hit the handler",                  // Message first
     "namespace", namespace,                          // Then key-value pairs
     "identity", identity,                            // As many as you need
 )
 ```
 
-The logger is attached to the request context by middleware, so every log line automatically includes the request ID and other metadata. No need to manually thread that through.
+Most BFFs access the logger via `app.logger` (an `*slog.Logger` field on the App struct). The agent-ops BFF uses a request-scoped logger instead: `helper.GetContextLoggerFromReq(r)`, which pulls the logger from the request context and includes request metadata automatically.
 
 ::: warning Debug Output is Hidden by Default
 `logger.Debug()` lines won't appear unless you start the BFF with `--log-level=debug`. The default level is `info`, which swallows Debug-level output. If you add a debug log and see nothing, this is why.
@@ -78,6 +77,10 @@ Add this to `.vscode/launch.json` in your project root:
 ```
 
 Adjust `program` to point at the `cmd` directory of whichever BFF you're debugging. The `args` array mirrors what you'd pass on the command line -- mock flags keep the server running without a real cluster.
+
+::: warning Mock Flags Differ by BFF
+Each BFF has its own set of mock flags. The automl example above uses `--mock-pipeline-server-client` and `--mock-s3-client`, but gen-ai has `--mock-ls-client`, `--mock-mcp-client`, `--mock-mlflow-client`, `--mock-nemo`, and `--mock-bff-clients`. The core-bff has `--mock-k8s-client`, `--mock-http-client`, and `--mock-bff-clients`. Check `cmd/main.go` in your specific BFF for the full list of available flags.
+:::
 
 ### Step 3: Set Breakpoints and Run
 
@@ -189,6 +192,10 @@ In Express, `res.json()` ends the response implicitly. In Go, writing to `w` doe
 Go tests run in VS Code just like Jest tests. Above every `func Test...` function, VS Code shows two clickable links: **run test** and **debug test**.
 
 Click **debug test** to launch that single test with Delve attached. Your breakpoints work, the Variables panel works, everything works exactly like debugging the server -- except the test runner is the entry point instead of `main.go`.
+
+::: info Gen-ai Uses Ginkgo/Gomega
+The gen-ai BFF uses the [Ginkgo](https://onsi.github.io/ginkgo/) test framework with [Gomega](https://onsi.github.io/gomega/) matchers in addition to testify. When debugging gen-ai tests, you may need to set breakpoints inside `Describe`/`It` blocks. All other BFFs use testify exclusively.
+:::
 
 For more control, add a test configuration to `.vscode/launch.json`:
 

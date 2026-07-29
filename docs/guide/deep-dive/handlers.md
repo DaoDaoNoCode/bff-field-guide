@@ -130,7 +130,7 @@ identity, ok := r.Context().Value(                 // Read user identity from co
 ```
 
 ::: info Constant Names Vary by BFF
-Exact constant names may differ between BFFs. For example, the namespace context key may be called `NamespaceQueryParameterKey` in the gen-ai BFF but use a different name in other BFFs. Always check `internal/constants/` in the specific BFF you are working on.
+Exact constant names differ between BFFs. The namespace context key is `NamespaceQueryParameterKey` in gen-ai but `NamespaceHeaderParameterKey` in all other BFFs (automl, autorag, maas, eval-hub, agent-ops, core-bff). Always check `internal/constants/` in the specific BFF you are working on.
 :::
 
 ### Request Headers
@@ -470,7 +470,7 @@ The tutorials teach you to create new handlers from scratch. In practice, your m
 
 Here is the workflow:
 
-**1. Find the handler.** Look in `internal/api/` for a file named after the feature. Model endpoints are in `lsd_models_handler.go`, MCP endpoints in `mcp_handler.go`. If you are not sure, grep for the URL path constant in `internal/constants/`.
+**1. Find the handler.** Look in `internal/api/` for a file named after the feature. Model endpoints are in `lsd_models_handler.go`, MCP endpoints are split across `mcp_tools_handler.go` and `mcp_status_handler.go`. If you are not sure, grep for the URL path constant in `internal/constants/`.
 
 **2. Find the route registration.** Open `app.go` and search for the handler function name. This tells you which middleware wraps it -- and therefore what data is already in the request context.
 
@@ -526,6 +526,10 @@ func (app *App) WriteJSON(                         // Helper to send JSON respon
 ```
 
 This is the equivalent of `res.status(200).json(data)` in Express. One function that handles serialization, headers, status code, and writing.
+
+::: info WriteJSON Marshaling Varies
+Most BFFs use `json.MarshalIndent` (pretty-printed JSON with tabs). However, core-bff and mlflow use `json.Marshal` (compact JSON, no indentation). The function signature and behavior are otherwise identical.
+:::
 
 ### The ReadJSON Helper
 

@@ -15,7 +15,7 @@ The existing `/healthcheck` endpoint returns a basic status. You are going to bu
   "data": {
     "status": "healthy",
     "version": "1.0.0",
-    "go_version": "go1.24.3",
+    "go_version": "go1.26.0",
     "uptime_seconds": 42
   }
 }
@@ -159,7 +159,7 @@ func (app *App) DetailedHealthcheckHandler(w http.ResponseWriter, r *http.Reques
 	health := &models.DetailedHealth{         // & means "create a pointer to this struct"
 		Status:        "healthy",             // Hard-coded for now -- a real check might verify dependencies
 		Version:       Version,               // Version is a constant defined in app.go (like a package version string)
-		GoVersion:     runtime.Version(),     // runtime.Version() returns "go1.24.3" -- like process.version in Node
+		GoVersion:     runtime.Version(),     // runtime.Version() returns "go1.26.0" -- like process.version in Node
 		UptimeSeconds: int64(time.Since(serverStartTime).Seconds()),
 		// time.Since(serverStartTime) gives a Duration -- .Seconds() converts to float64
 		// int64(...) truncates the float to a whole number
@@ -299,7 +299,7 @@ Cross your fingers. You should see:
   "data": {
     "status": "healthy",
     "version": "1.0.0",
-    "go_version": "go1.24.3",
+    "go_version": "go1.26.0",
     "uptime_seconds": 5
   }
 }

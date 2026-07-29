@@ -92,8 +92,8 @@ Now let's add a few more flags:
 ```go
     flag.StringVar(&cfg.AuthMethod,                // Same pattern, but for a string flag
         "auth-method",                             // The flag name: --auth-method
-        getEnvAsString("AUTH_METHOD", "user_token"),// Default varies by BFF: "user_token" (gen-ai, eval-hub)
-                                                   // or "internal" (automl, maas, autorag)
+        getEnvAsString("AUTH_METHOD", "user_token"),// Default varies by BFF: "user_token" (gen-ai, automl, autorag, mlflow)
+                                                   // or "internal" (maas, eval-hub, agent-ops)
         "Authentication method")                   // Help text
 
     flag.BoolVar(&cfg.MockK8sClient,               // Boolean flag: --mock-k8s-client
@@ -221,6 +221,9 @@ Now we create and start the HTTP server:
         ReadTimeout:  30 * time.Second,            // Max time to read the full request (headers + body)
         WriteTimeout: 30 * time.Second,            // Max time to write the full response
     }                                              // Server is configured but not yet started
+
+    // NOTE: Timeouts vary by BFF. The gen-ai BFF uses 8-minute read/write timeouts
+    // to support large file uploads and PDF processing. Check your BFF's main.go.
 ```
 
 This creates a standard library `http.Server`. The key field is `Handler: app.Routes()` -- this returns an `http.Handler` with all the routes registered. Think of it as the fully-configured Express app being passed to `http.createServer()`. The timeout fields are explicit here -- Express leaves these to defaults or requires manual configuration.

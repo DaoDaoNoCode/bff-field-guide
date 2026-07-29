@@ -356,7 +356,7 @@ go version
 **What you should see:**
 
 ```
-go version go1.24.3 darwin/arm64
+go version go1.26.0 darwin/arm64
 ```
 
 ---

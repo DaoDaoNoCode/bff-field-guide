@@ -135,6 +135,10 @@ func (app *App) badRequestResponse(                // 400 Bad Request -- invalid
 
 Missing or invalid credentials:
 
+::: info Signature Varies by BFF
+The `unauthorizedResponse` signature differs: gen-ai, agent-ops, mlflow, and core-bff take `err error`, while automl and autorag take `message string`. The behavior is the same — the difference is only in the parameter type.
+:::
+
 ```go
 func (app *App) unauthorizedResponse(              // 401 Unauthorized -- missing/invalid credentials
     w http.ResponseWriter,                         // Response writer

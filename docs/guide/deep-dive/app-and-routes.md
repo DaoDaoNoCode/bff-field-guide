@@ -60,7 +60,7 @@ type App struct {                                  // The App struct -- like a c
 Every field is a dependency that handlers might need. There are no globals, no singletons hidden behind `require()` calls. If a handler needs a Kubernetes client, it gets it through `app.kubernetesClientFactory`. If it needs to log, it uses `app.logger`. Everything is explicit.
 
 ::: info Simplified Composite
-The `App` struct shown above is a simplified composite that blends fields from the automl BFF (e.g., `pipelineServerClientFactory`, `s3ClientFactory`, `repositories`) with gen-ai fields. No single BFF has exactly this set of fields. Real BFFs have many more fields depending on the services they integrate with. For example, gen-ai has `llamaStackClientFactory`, `mcpClientFactory`, `mlflowClientFactory`, `bffClientFactory`, `memoryStore`, and others. Always check the actual `internal/api/app.go` in the BFF you are working on.
+The `App` struct shown above is a simplified composite that blends fields from the automl BFF (e.g., `pipelineServerClientFactory`, `s3ClientFactory`, `repositories`) with gen-ai fields. No single BFF has exactly this set of fields. Real BFFs have many more fields depending on the services they integrate with. For example, gen-ai has `llamaStackClientFactory`, `nemoClientFactory`, `mcpClientFactory`, `mlflowClientFactory`, `bffClientFactory`, `memoryStore`, `openAPI`, `cleanupFuncs`, and others. Always check the actual `internal/api/app.go` in the BFF you are working on.
 :::
 
 **TypeScript equivalent:**
@@ -280,31 +280,31 @@ Here's the complete picture. Before diving into the code, look at how the routin
 
 ```
                         combinedMux (top-level splitter)
-                        ┌──────────────────────────────┐
-                        │                              │
-               /healthcheck                       / (everything else)
-                        │                              │
-              RecoverPanic                      RecoverPanic
-              EnableTelemetry                   EnableTelemetry
-              (no auth, no CORS)                EnableCORS
-                        │                       InjectRequestIdentity
-                        │                              │
-              healthcheckRouter                     appMux
-              GET /healthcheck                    ┌────┴────┐
-                                           /api/v1/*       /* (catch-all)
-                                           (prefix)        (static files +
-                                                │           index.html SPA)
-                                           apiRouter
-                                    ┌──────────┼───────────────┐
-                                    │          │               │
-                              /api/v1/user /api/v1/secrets /api/v1/pipeline-runs
-                              (no extra    AttachNamespace  AttachNamespace
-                               middleware)                  RequireAccess
-                                                            AttachClient
-                                                            AttachPipeline
+                ┌──────────────┬──────────────────────────┐
+                │              │                          │
+       /healthcheck    /openapi*, /swagger-ui        / (everything else)
+                │       (no auth, no CORS,                │
+      RecoverPanic      served directly)            RecoverPanic
+      EnableTelemetry                               EnableTelemetry
+      (no auth, no CORS)                            EnableCORS
+                │                                   InjectRequestIdentity
+                │                                         │
+      healthcheckRouter                                appMux
+      GET /healthcheck                               ┌────┴────┐
+                                              /api/v1/*       /* (catch-all)
+                                              (prefix)        (static files +
+                                                   │           index.html SPA)
+                                              apiRouter
+                                       ┌──────────┼───────────────┐
+                                       │          │               │
+                                 /api/v1/user /api/v1/secrets /api/v1/pipeline-runs
+                                 (no extra    AttachNamespace  AttachNamespace
+                                  middleware)                  RequireAccess
+                                                               AttachClient
+                                                               AttachPipeline
 ```
 
-Two key things to notice: (1) healthcheck gets minimal middleware (no auth) because K8s probes need to reach it without credentials, and (2) API routes get the full stack, then each individual route adds its own middleware on top.
+Three key things to notice: (1) healthcheck gets minimal middleware (no auth) because K8s probes need to reach it without credentials, (2) OpenAPI spec and Swagger UI routes are also public (no auth) so tooling can discover the API schema without credentials, and (3) API routes get the full stack, then each individual route adds its own middleware on top.
 
 Now the code that builds this tree:
 
@@ -363,6 +363,16 @@ func (app *App) Routes() http.Handler {            // Build the complete routing
             app.EnableTelemetry(                   // ...and telemetry
                 healthcheckRouter)))               // No auth, no CORS
 
+    // OpenAPI routes (public -- no auth required)
+    combinedMux.HandleFunc("/openapi",             // Redirect to Swagger UI
+        app.openAPI.HandleOpenAPIRedirectWrapper)
+    combinedMux.HandleFunc("/openapi.json",        // Serve spec as JSON
+        app.openAPI.HandleOpenAPIJSONWrapper)
+    combinedMux.HandleFunc("/openapi.yaml",        // Serve spec as YAML
+        app.openAPI.HandleOpenAPIYAMLWrapper)
+    combinedMux.HandleFunc("/swagger-ui",          // Interactive API docs
+        app.openAPI.HandleSwaggerUIWrapper)
+
     combinedMux.Handle("/",                        // Everything else: full middleware stack
         app.RecoverPanic(                          // 1. Catch panics → 500
             app.EnableTelemetry(                   // 2. Add trace ID to logs
@@ -378,9 +388,11 @@ There is a lot going on, so let me highlight the key decisions:
 
 1. **Two separate routers**: The health check has minimal middleware (no auth, no CORS) because Kubernetes probes need to hit it without authentication.
 
-2. **Global middleware** wraps everything under `/`: `RecoverPanic` catches panics (like uncaught exceptions), `EnableTelemetry` adds trace IDs, `EnableCORS` handles CORS headers, and `InjectRequestIdentity` extracts the user.
+2. **Public OpenAPI routes**: The `/openapi.*` and `/swagger-ui` paths are registered directly on `combinedMux` with no auth middleware. This lets API tooling discover the schema without credentials. In core-bff, the Swagger UI and redirect routes are only registered in dev mode.
 
-3. **Route-level middleware** is applied per-route: `AttachNamespace`, `RequireAccess`, `AttachClient` only run on routes that need them.
+3. **Global middleware** wraps everything under `/`: `RecoverPanic` catches panics (like uncaught exceptions), `EnableTelemetry` adds trace IDs, `EnableCORS` handles CORS headers, and `InjectRequestIdentity` extracts the user.
+
+4. **Route-level middleware** is applied per-route: `AttachNamespace`, `RequireAccess`, `AttachClient` only run on routes that need them.
 
 The Express equivalent uses `app.use()` for global middleware and per-route middleware arrays for route-level middleware. The execution order is the same; only the reading direction differs (left-to-right in Express vs. inside-out in Go).
 
@@ -392,19 +404,23 @@ One subtle `ServeMux` rule: a **trailing slash** changes the matching behavior. 
 
 ## The Shutdown Method
 
-The `App` also has a `Shutdown()` method for cleaning up resources:
+The `App` also has a `Shutdown()` method for cleaning up resources. The gen-ai BFF uses a `cleanupFuncs` pattern -- during `NewApp()`, each mock process (envtest, MLflow, LlamaStack) registers a cleanup callback, and `Shutdown()` runs them in reverse order (LIFO):
 
 ```go
 func (app *App) Shutdown() error {                 // Called during graceful shutdown
     app.logger.Info("shutting down app...")         // Log that we're cleaning up
-    if app.testEnv != nil {                        // Check if we're running with envtest
-        return app.testEnv.Stop()                  // Stop the in-memory K8s API server
+    for i := len(app.cleanupFuncs) - 1; i >= 0; i-- { // Walk callbacks in reverse (LIFO)
+        app.cleanupFuncs[i]()                      // Run each cleanup (stop envtest, MLflow, etc.)
     }
-    return nil                                     // Nothing to clean up in production mode
+    return nil
 }
 ```
 
-This is called by the graceful shutdown code in `main.go`. In mock mode, it tears down the in-memory Kubernetes API server. In production, it might close database connections or stop background workers.
+This is called by the graceful shutdown code in `main.go`. In mock mode, the cleanup callbacks tear down in-memory services like the envtest Kubernetes API server and the MLflow mock server. In production, the slice is empty so the loop is a no-op.
+
+::: info Core-BFF Variant
+The core-bff uses a simpler approach -- it checks `app.testEnv` directly and also stops its WebSocket connection tracker (`app.wsTracker.Stop()`). The `cleanupFuncs` pattern is specific to gen-ai, which has more mock processes to manage.
+:::
 
 ::: info Checkpoint
 The complete picture: `NewApp()` creates the dependency container with real or mock clients. `Routes()` wires up all endpoints with middleware chains. The health check bypasses auth. API routes get the full middleware stack. `Shutdown()` cleans up when the server stops.

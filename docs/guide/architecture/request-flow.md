@@ -466,14 +466,21 @@ Now let us zoom in on how authentication works at each layer. This is one of the
 
 **What just happened?** The user's identity starts as login credentials, becomes an OAuth token, gets validated by the backend, is decomposed into username/groups headers, and finally gets reassembled by the BFF into a `RequestIdentity` struct. The raw token also travels through so the BFF can use it for Kubernetes API calls and upstream service authentication.
 
-::: tip Auth Methods Vary by BFF
+::: tip Auth Methods and Headers Vary by BFF
 BFFs support up to three authentication methods, configured by the `--auth-method` flag. Not every BFF supports all three:
 
-- **`internal`** -- reads identity from `kubeflow-userid` and `kubeflow-groups` headers (automl, maas, autorag, model-registry)
-- **`user_token`** -- reads the raw `Authorization: Bearer` token (gen-ai, eval-hub, mlflow, and most others)
-- **`disabled`** -- skips auth entirely (automl, autorag, eval-hub, gen-ai -- useful for local dev with mocks)
+- **`internal`** -- reads identity from `kubeflow-userid` and `kubeflow-groups` headers
+- **`user_token`** -- reads the auth token from a configurable header (varies by BFF)
+- **`disabled`** -- skips auth entirely (useful for local dev with mocks)
 
-The default also varies: gen-ai defaults to `user_token`, while automl/autorag default to `internal`. Always check the specific BFF's `cmd/main.go` for the supported methods and default.
+The default auth method and token header differ across BFFs:
+
+| BFF | Default | Token Header |
+|---|---|---|
+| gen-ai, automl, autorag, mlflow | `user_token` | `x-forwarded-access-token` (gen-ai), `Authorization` (others) |
+| maas, eval-hub, agent-ops | `internal` | `x-forwarded-access-token` (maas), `Authorization` (others) |
+
+Always check the specific BFF's `cmd/main.go` for the supported methods and default.
 :::
 
 ## The Complete Middleware Chain

@@ -161,11 +161,11 @@ The module definition file. Declares the module path, required Go version, and a
 ```go
 module github.com/opendatahub-io/automl-library/bff  // Module path (like "name" in package.json)
 
-go 1.24                                              // Required Go version
+go 1.26                                              // Required Go version
 
 require (                                            // Dependencies (like "dependencies" in package.json)
     github.com/julienschmidt/httprouter v1.3.0       // The HTTP router
-    github.com/stretchr/testify v1.9.0               // Assertion library for tests
+    github.com/stretchr/testify v1.11.1              // Assertion library for tests
 )
 ```
 

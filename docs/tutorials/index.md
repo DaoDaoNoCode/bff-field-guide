@@ -20,16 +20,16 @@ You need four things ready. If any of these fail, stop and fix them before start
 Run these commands right now. Not later -- right now.
 
 ```bash
-go version          # You need 1.24 or later
+go version          # You need 1.26 or later
 ```
 
 **What you should see:**
 
 ```
-go version go1.24.3 darwin/arm64
+go version go1.26.3 darwin/arm64
 ```
 
-The exact patch version and architecture do not matter, but the major version must be 1.24 or higher.
+The exact patch version and architecture do not matter, but the major version must be 1.26 or higher.
 
 ```bash
 cd packages/automl/bff   # Navigate to the BFF we'll work in
@@ -41,7 +41,7 @@ go build ./...            # Compile everything -- should produce zero output
 
 **Your full checklist:**
 
-- [x] **Go 1.24+** installed and working
+- [x] **Go 1.26+** installed and working
 - [x] The **odh-dashboard repo** cloned locally
 - [x] **VS Code** with the [Go extension](https://marketplace.visualstudio.com/items?itemName=golang.go) installed and configured
 - [x] You have read **Part 1** (Go for TypeScript Devs), **Part 2** (BFF Architecture), and **Part 3** (BFF Deep Dive) -- or at least the sections on types, structs, functions, error handling, JSON, and HTTP servers

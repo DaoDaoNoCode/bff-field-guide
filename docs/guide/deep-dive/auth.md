@@ -22,17 +22,23 @@ BFFs support up to three authentication methods, controlled by the `--auth-metho
 | Method | Flag Value | How It Works | Used In |
 |---|---|---|---|
 | **Internal** | `internal` | Reads `kubeflow-userid` and `kubeflow-groups` headers | ODH / Kubeflow deployments |
-| **User Token** | `user_token` | Reads `Authorization: Bearer <token>` header | RHOAI deployments |
+| **User Token** | `user_token` | Reads an auth token header (name varies by BFF) | RHOAI deployments |
 | **Disabled** | `disabled` | Bypasses auth (behavior varies by BFF) | Local development / testing |
 
-::: warning Not All BFFs Support All Auth Methods
-Not all BFFs support all three auth methods:
-- **gen-ai, eval-hub**: `user_token` and `disabled` only (no `internal`)
-- **maas**: `internal` and `user_token` only (no `disabled`)
-- **automl, autorag**: all three (`internal`, `user_token`, `disabled`)
-- **mlflow, model-registry**: check each BFF's `cmd/main.go` for the current list
+::: warning Auth Defaults and Headers Vary by BFF
+The default auth method and the header used to extract the token differ across BFFs:
 
-The default also varies: gen-ai defaults to `user_token`, while automl/maas/autorag default to `internal`. Always check the specific BFF's `main.go`.
+| BFF | Default Auth Method | Token Header |
+|---|---|---|
+| **gen-ai** | `user_token` | `x-forwarded-access-token` |
+| **automl** | `user_token` | `Authorization` |
+| **autorag** | `user_token` | `Authorization` |
+| **mlflow** | `user_token` | `Authorization` |
+| **maas** | `internal` | `x-forwarded-access-token` |
+| **eval-hub** | `internal` | `Authorization` |
+| **agent-ops** | `internal` | `Authorization` |
+
+Not all BFFs support all three auth methods. For example, gen-ai and mlflow support `user_token` and `disabled` but not `internal`. Always check the specific BFF's `cmd/main.go` for the supported methods.
 :::
 
 ### Internal Auth (Kubeflow Headers)
@@ -48,10 +54,12 @@ The BFF reads these headers and trusts them because the proxy has already verifi
 
 ### User Token Auth (Bearer Token)
 
-In RHOAI deployments, the frontend sends the user's OpenShift token directly:
+In RHOAI deployments, the user's OpenShift token is forwarded to the BFF via an HTTP header. The header name varies by BFF -- gen-ai and maas use `x-forwarded-access-token`, while automl, autorag, eval-hub, mlflow, and agent-ops use `Authorization`:
 
 ```
-Authorization: Bearer sha256~abc123...
+x-forwarded-access-token: sha256~abc123...    <- gen-ai, maas
+-- or --
+Authorization: Bearer sha256~abc123...         <- automl, autorag, eval-hub, mlflow, agent-ops
 ```
 
 The BFF uses this token to create a Kubernetes client that operates *as the user*. Every K8s API call the BFF makes is scoped to that user's permissions. This is the more secure approach -- the BFF never has more power than the user.

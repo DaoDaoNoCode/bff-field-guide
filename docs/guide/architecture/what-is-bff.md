@@ -203,9 +203,9 @@ You should now understand why Go is the language of choice for BFFs:
 
 </div>
 
-## The Seven BFFs in ODH Dashboard
+## The Eight BFFs in ODH Dashboard
 
-Seven packages in the ODH Dashboard monorepo have their own Go BFF. Each one serves a distinct domain:
+Eight packages in the ODH Dashboard monorepo have their own Go BFF. Each one serves a distinct domain:
 
 | Package | BFF Location | What It Does |
 |---|---|---|
@@ -216,6 +216,7 @@ Seven packages in the ODH Dashboard monorepo have their own Go BFF. Each one ser
 | **autorag** | `packages/autorag/bff/` | RAG (Retrieval-Augmented Generation) pipeline management. Integrates with LlamaStack for vector store indexing and S3 for document storage. Manages RAG pipeline configurations and runs. |
 | **eval-hub** | `packages/eval-hub/bff/` | LM-Eval job management for model evaluation. Discovers EvalHub service CRDs in the cluster and proxies evaluation job CRUD operations. Manages evaluation configurations and results. |
 | **mlflow** | `packages/mlflow/bff/` | MLflow experiment tracking integration. Auto-discovers MLflow Custom Resources in the cluster, proxies experiment and run APIs, and provides CR lifecycle management. |
+| **agent-ops** | `packages/agent-ops/bff/` | Agent runtime management. Manages AgentRuntime CRDs for deploying and operating AI agents in the cluster. Integrates with other BFFs (gen-ai, model-registry) via inter-BFF communication for agent-related operations. |
 
 ::: info Not Every Package Needs a BFF
 Packages like `model-serving`, `notebooks`, `kserve`, and `observability` do not have BFFs. They get their data through the main dashboard backend (Fastify), which proxies requests directly to the Kubernetes API. A package only needs its own BFF when it talks to services beyond what the main backend provides -- like LlamaStack, MLflow, or S3.
@@ -283,7 +284,7 @@ That is it. One fetch call. The BFF handles everything else.
 You should now be able to:
 1. Explain why browsers cannot talk to Kubernetes directly (auth, CORS, complexity)
 2. Describe what a BFF does and does not do
-3. Name all seven BFFs and what domain each one covers
+3. Name all eight BFFs and what domain each one covers
 4. Read a simple BFF handler and understand the basic pattern
 
 </div>
