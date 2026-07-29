@@ -215,5 +215,4 @@ The `distributions/` folder turns individual BFFs into deployable products. `bas
 - [Directory Structure](./directory-structure) -- how a single package BFF is organized
 - [The Big Picture](./big-picture) -- where distributions fit in the overall architecture
 - [The App Struct & Routes](../deep-dive/app-and-routes) -- deep dive into route registration (covers package BFFs)
-- [What Is Coming Next](./whats-next) -- the migration roadmap for core-bff
 :::

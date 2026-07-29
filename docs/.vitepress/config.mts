@@ -67,7 +67,6 @@ export default defineConfig({
             { text: 'Request Flow', link: '/guide/architecture/request-flow' },
             { text: 'Directory Structure', link: '/guide/architecture/directory-structure' },
             { text: 'Distributions', link: '/guide/architecture/distributions' },
-            { text: 'What Is Coming Next', link: '/guide/architecture/whats-next' },
           ],
         },
         {
