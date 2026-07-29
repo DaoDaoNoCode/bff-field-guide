@@ -668,6 +668,7 @@ Every BFF follows the same layout: `cmd/` for the entry point, `internal/api/` f
 :::
 
 ::: info See Also
+- [Distributions](./distributions) -- How BFFs, frontends, and shell frameworks compose into deployable products
 - [Entry Point (main.go)](../deep-dive/entry-point) -- Deep dive into what `cmd/main.go` does
 - [The App Struct & Routes](../deep-dive/app-and-routes) -- How `internal/api/app.go` wires everything together
 - [Writing Handlers](../deep-dive/handlers) -- How to add a new handler file to `internal/api/`
