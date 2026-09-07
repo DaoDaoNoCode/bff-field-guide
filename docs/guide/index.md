@@ -160,10 +160,20 @@ After a week of writing Go, this transparency starts to feel like a superpower. 
 
 ## How This Guide Is Structured
 
-This guide is organized into three progressive parts, followed by hands-on tutorials and reference material. Each part builds on the previous one, so going in order is recommended -- but feel free to jump around if you need to fix a bug _right now_ and can't wait.
+This guide is organized into six progressive parts, followed by hands-on tutorials and reference material. The first three parts get you fluent in Go and the BFF layer; the last three take you into Kubernetes, the `dashboard-operator`, and the day-to-day development workflow that ties the whole Go side of the repo together. Each part builds on the previous one, so going in order is recommended -- but feel free to jump around if you need to fix a bug _right now_ and can't wait.
 
 ::: tip Already Know Go?
 If you have written Go before (even a little), skip Part 1 and jump straight to [What is a BFF?](./architecture/what-is-bff). Part 1 teaches Go through TypeScript equivalents -- valuable if Go is new to you, but skippable if you already know the basics. You can always circle back to specific chapters (like [JSON](./go-basics/json) or [Interfaces](./go-basics/interfaces)) when you hit something unfamiliar.
+:::
+
+::: info Pick Your Learning Path
+There are two Go codebases in this repo -- the **BFFs** (the per-module HTTP services your React app calls) and the **dashboard-operator** (the Kubernetes controller that deploys those modules). You don't have to learn both at once:
+
+- **BFF track** -- Parts 1 → 2 → 3, then Tutorials 1–6. Everything you need to add endpoints and wire inter-BFF calls.
+- **Operator track** -- Part 1 (skim), then Parts 4 → 5 → 6, then Tutorials 7–9. For controller-runtime, the Dashboard CRD, and deploying the operator.
+- **Full track** -- Parts 1 → 6 in order, then all nine tutorials. The complete tour of the repo's Go realm.
+
+Part 6 (Development Workflow) is shared -- come back to it whichever track you take.
 :::
 
 ### Part 1: Go for TypeScript Devs
@@ -215,8 +225,38 @@ Walking through real code from the ODH Dashboard repository, explained line by l
 - **Models, DTOs, and the data layer** -- how data is structured as it moves through the BFF
 - **Calling upstream services** -- how the BFF talks to LlamaStack, Model Registry, and other backends
 - **Error handling patterns** and the error envelope -- how errors are structured and returned
+- **Inter-BFF communication** -- how one BFF calls another (and how any BFF calls `core-bff`) with the `bffclient` package, service discovery, and user-token forwarding
 
 _After this part, you'll be able to open any BFF in the repo and read it like a book._
+
+### Part 4: Kubernetes for Go Developers
+
+A bridge chapter. Before you can read operator code, you need a working mental model of the Kubernetes concepts it's built on -- explained the same way as everything else, through things you already know.
+
+- **Resources & CRDs** -- what a Custom Resource Definition is, the `Dashboard` CRD, kubebuilder markers, and CEL validation
+- **RBAC & Access** -- ServiceAccounts, Roles, and the `SubjectAccessReview` checks you already met in the BFF auth layer
+- **Controller concepts** -- finalizers, owner references, Server-Side Apply, and status conditions
+
+_After this part, YAML manifests and CRD types will stop looking like magic._
+
+### Part 5: The Dashboard Operator
+
+A full deep dive into the `dashboard-operator/` -- the Kubernetes controller that deploys and manages every dashboard module.
+
+- **controller-runtime** -- the Scheme, Manager, Controller, and Reconciler that every operator is built from
+- **The Dashboard CRD** and the reconcile pipeline that turns spec into running pods
+- **Modules & Federation** -- the module registry, dependency resolution, and the federation ConfigMap
+- **The ODH Operator connection** -- how the platform operator projects config into the Dashboard CR
+
+_After this part, you'll be able to trace a `Dashboard` CR from `kubectl apply` to running module pods._
+
+### Part 6: Development Workflow
+
+The practical glue: how to actually build, test, generate, and debug across the multi-module monorepo -- for both BFFs and the operator.
+
+- **The monorepo** -- multiple `go.mod` files, `go.work`, and IDE setup
+- **Make targets** -- the commands you'll run every day
+- **Debugging & gotchas** -- Delve, structured logging, and the mistakes everyone makes once
 
 ### Tutorials
 
@@ -227,6 +267,10 @@ Hands-on, step-by-step exercises where you build real features. Each tutorial ta
 3. **Writing Handler Tests** -- Unit test your handlers with `httptest` and mock clients
 4. **Mock Clients** -- Create mock implementations for Kubernetes and upstream service clients
 5. **Contract Tests** -- Validate that your API matches the OpenAPI specification
+6. **Inter-BFF Communication** -- Wire the `bffclient` package end-to-end so one BFF can call another
+7. **Onboard a New Module** -- Scaffold a new federated module with `mod-arch-installer` and register it in the host
+8. **Register a Module in the Operator** -- Add standalone manifests and the operator registry entry that deploys it
+9. **Build & Deploy the Operator** -- Build the operator image, deploy it to a cluster, and run it in dev mode
 
 ### Reference
 
@@ -252,6 +296,12 @@ After working through this guide, you will be able to:
 - **Review Go PRs** with confidence. You'll catch common mistakes, suggest improvements, and understand the patterns well enough to know when something deviates from them.
 
 - **Run the BFF locally** with mock flags for development without a cluster. You'll be able to start the BFF, hit it with `curl`, and iterate on your changes without needing a full OpenShift environment.
+
+- **Read and reason about the dashboard-operator** -- follow a `Dashboard` CR through the reconcile pipeline, understand how modules get deployed, and know where to look when a module won't come up.
+
+- **Onboard a new module end-to-end** -- scaffold it with `mod-arch-installer`, register it in the host, add its standalone manifests, and wire it into the operator so the platform can deploy it.
+
+- **Build and deploy the operator** -- produce a container image with Docker or Podman, install it with Helm, and run it locally in dev mode against a real cluster.
 
 ## Prerequisites
 

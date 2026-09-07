@@ -410,3 +410,174 @@ if name == "" {                        // Check for zero value of string
     return fmt.Errorf("name is required")  // Not if name == nil or name == undefined
 }
 ```
+
+## Operator & Kubernetes Terms
+
+These terms come up in Parts 4–6 when you move from the BFFs into the `dashboard-operator` and the modular architecture. They're grouped here because they only matter once you're reading operator code.
+
+### Conditions
+
+Structured entries in a resource's `.status.conditions` array describing _why_ it's in its current state (`type`, `status`, `reason`, `message`). The operator rolls per-module conditions up into a top-level `Ready` condition.
+
+**TypeScript equivalent:** Like a discriminated-union status object: `{ type: 'Ready', status: 'False', reason: 'ImagePullBackOff', message: '...' }`.
+
+**Where you will see it:** `dashboard-operator/internal/controller/` status updates; `oc get dashboard -o yaml` output.
+
+---
+
+### controller-runtime
+
+The Go framework (`sigs.k8s.io/controller-runtime`) every Kubernetes operator is built on. It provides the Manager, the client cache, and the plumbing that calls your Reconciler.
+
+**TypeScript equivalent:** Like a backend framework (NestJS) that owns the lifecycle and calls _your_ handlers — you write the business logic, it runs the loop.
+
+**Where you will see it:** Imports across `dashboard-operator/`; see [Part 5: controller-runtime](/guide/operator/controller-runtime).
+
+---
+
+### CRD (Custom Resource Definition)
+
+A schema that teaches the Kubernetes API server about a new resource kind. Once installed, `kubectl get <kind>` works as if the type were built in. The `Dashboard` CRD defines the resource the operator watches.
+
+**TypeScript equivalent:** Like registering a new typed REST resource with a JSON Schema the server validates against.
+
+**Where you will see it:** `dashboard-operator/api/v1alpha1/*_types.go` (the Go source) and `config/crd/bases/*.yaml` (the generated schema). See [Resources & CRDs](/guide/kubernetes/resources-and-crds).
+
+---
+
+### DSC (DataScienceCluster)
+
+The top-level custom resource the ODH/RHOAI platform operator reconciles. Its `spec.components` toggle which platform features are enabled — and those toggles _gate_ which dashboard modules the operator deploys.
+
+**Where you will see it:** [The ODH Operator Connection](/guide/operator/odh-operator-connection); the `RequiredDSCComponents` field on module registry entries.
+
+---
+
+### Deployment Mode (Sidecar vs Standalone)
+
+How the operator lays out module pods. **Sidecar** (legacy) runs every BFF as a container in one pod. **Standalone** (current) gives each enabled module its own Deployment, ServiceAccount, and NetworkPolicy. Controlled by `spec.deploymentMode`.
+
+**Where you will see it:** [The Reconciler](/guide/operator/reconciler).
+
+---
+
+### Embedding
+
+Go's composition mechanism — putting a type inside a struct with no field name promotes its fields and methods to the outer struct. The `DashboardReconciler` embeds `client.Client` so it can call `r.Get(...)` directly.
+
+**TypeScript equivalent:** Closest to mixins or `extends` for behavior, but it's composition, not inheritance.
+
+```go
+type DashboardReconciler struct {
+    client.Client                       // Embedded — promotes Get/List/Create/Update/Patch
+    Scheme *runtime.Scheme
+}
+```
+
+---
+
+### envtest
+
+A controller-runtime test harness that spins up a **real** `kube-apiserver` and `etcd` in-process, so reconciler tests run against a genuine API server instead of a fake.
+
+**TypeScript equivalent:** Like an integration test against a real (ephemeral) database instead of a mocked repository.
+
+**Where you will see it:** `dashboard-operator/internal/controller/*_test.go`; see [Testing the Operator](/guide/operator/testing).
+
+---
+
+### Federation ConfigMap
+
+A ConfigMap the operator generates listing each enabled module's remote entry and proxy routes. The frontend host reads it to know which modules to load and where to proxy their API calls. A SHA-256 hash of its content is stamped on the main Deployment so a config change triggers a rolling restart.
+
+**Where you will see it:** [Modules & Federation](/guide/operator/modules-and-federation).
+
+---
+
+### Finalizer
+
+A string on a resource's `metadata.finalizers` that blocks deletion until the operator does cleanup and removes it. This is how the operator tears down cross-namespace resources before the CR disappears.
+
+**TypeScript equivalent:** Like an `onBeforeDelete` hook that must complete before the record is actually removed.
+
+**Where you will see it:** [Controller Concepts](/guide/kubernetes/controller-concepts); [The Reconciler](/guide/operator/reconciler).
+
+---
+
+### GVK (Group / Version / Kind)
+
+The three-part identity of every Kubernetes type — e.g. `components.platform.opendatahub.io` / `v1alpha1` / `Dashboard`. The Scheme maps GVKs to Go types.
+
+**Where you will see it:** `api/v1alpha1/groupversion_info.go`; Scheme registration.
+
+---
+
+### Manager
+
+The controller-runtime object that owns shared infrastructure — the client cache, leader election, metrics, health checks — and starts all registered controllers with `mgr.Start(ctx)`.
+
+**Where you will see it:** `dashboard-operator/cmd/manager/`; [controller-runtime](/guide/operator/controller-runtime).
+
+---
+
+### Module Federation
+
+The runtime mechanism (via `OdhFederationPlugin`) that lets the host dashboard load each module's UI as a separate remote bundle at runtime. `DEPLOYMENT_MODE==='standalone'` decides whether a package builds as a host or a remote.
+
+**TypeScript equivalent:** Webpack/rspack Module Federation — dynamically importing a remote's `remoteEntry.js`.
+
+**Where you will see it:** `packages/<name>/frontend/config/moduleFederation.js`; [Onboard a New Module](/tutorials/onboard-a-module).
+
+---
+
+### ModuleHandler
+
+The interface (`NewHandler` / `IsEnabled` / `BuildModuleCR`) the ODH platform operator implements to project DSC config into the `Dashboard` CR. It's the seam between the two operator levels.
+
+**Where you will see it:** [The ODH Operator Connection](/guide/operator/odh-operator-connection).
+
+---
+
+### Owner Reference
+
+A pointer in a child resource's metadata back to its parent. Kubernetes garbage-collects the child automatically when the parent is deleted. The operator sets these on the resources it creates.
+
+**TypeScript equivalent:** Like an `ON DELETE CASCADE` foreign key.
+
+**Where you will see it:** [Controller Concepts](/guide/kubernetes/controller-concepts).
+
+---
+
+### Reconciler
+
+The heart of an operator: a function `Reconcile(ctx, req) (ctrl.Result, error)` that reads the current state, compares it to the desired spec, and makes changes to close the gap. It must be **idempotent** — running it twice must be safe.
+
+**TypeScript equivalent:** Like React's render loop — you describe the desired UI (spec), and the reconciler makes the DOM (cluster) match, over and over.
+
+**Where you will see it:** `dashboard-operator/internal/controller/dashboard_controller.go`; [The Reconciler](/guide/operator/reconciler).
+
+---
+
+### `RELATED_IMAGE_*`
+
+The Konflux/OLM contract for digest-pinned images. The operator resolves each module's image from a `RELATED_IMAGE_ODH_MOD_ARCH_<NAME>_IMAGE` env var, which the platform operator overrides with a pinned digest at install time.
+
+**Where you will see it:** `dashboard-operator/charts/dashboard/values.yaml`; [Register a Module in the Operator](/tutorials/register-module-in-operator).
+
+---
+
+### Scheme
+
+A registry mapping GVKs to Go types so controller-runtime can (de)serialize resources. Types register themselves via `init()` + `AddToScheme`.
+
+**Where you will see it:** `api/v1alpha1/groupversion_info.go`; manager setup.
+
+---
+
+### Server-Side Apply (SSA)
+
+A Kubernetes apply strategy where each actor declares **field ownership**. The operator applies its desired state with a field manager (`dashboard-operator`) and the API server merges it, so it never clobbers fields another controller owns.
+
+**TypeScript equivalent:** Like a `PATCH` with a merge strategy, but the server tracks who owns which field.
+
+**Where you will see it:** `deploy.NewDeployer` usage; [Controller Concepts](/guide/kubernetes/controller-concepts).

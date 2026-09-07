@@ -91,112 +91,11 @@ The SSE handler doesn't bypass the middleware chain. Auth, namespace validation,
 
 ## Inter-BFF Communication
 
-The gen-ai BFF needs API keys from the maas BFF. It doesn't go directly to the MaaS backend -- it calls the maas BFF's token endpoint. This is BFF-to-BFF HTTP communication.
+The gen-ai BFF needs API keys from the maas BFF, so it calls the maas BFF's token endpoint directly -- BFF-to-BFF HTTP over the `bffclient` package, forwarding the user's own token so the target enforces RBAC as that user. It's the same factory-and-interface pattern you saw for upstream [integrations](./integrations), just pointed at another BFF instead of an external service.
 
-The `bffclient` package in `internal/integrations/bffclient/` handles this. Here's the key interface:
+This is a big enough topic -- service discovery, `BFF_<TARGET>_*` env vars, `user_token` vs `internal` auth (and its security implications), `MOCK_BFF_CLIENTS`, structured error codes, and the special case of calling core-bff -- that it has its own chapter.
 
-```go
-// BFFClientInterface defines inter-BFF communication
-type BFFClientInterface interface {
-    Call(ctx context.Context,                       // Request context (for cancellation + auth)
-        method, path string,                       // HTTP method and path (e.g., "POST", "/tokens")
-        body interface{},                          // Request body (JSON-encoded, nil for no body)
-        response interface{},                      // Pointer to response struct (JSON-decoded)
-    ) error                                        // Returns error if anything goes wrong
-
-    IsAvailable(ctx context.Context) bool          // Health check: is the target reachable?
-    GetBaseURL() string                            // The target BFF's URL
-    GetTarget() BFFTarget                          // Which BFF: maas(:8243), gen-ai(:8143),
-                                                   //   model-registry(:8043), or mlflow(:8343)
-}
-```
-
-And here's how a handler uses it. From `maas_tokens_handler.go`:
-
-```go
-func (app *App) MaaSIssueTokenHandler(
-    w http.ResponseWriter, r *http.Request, _ httprouter.Params,
-) {
-    ctx := r.Context()
-
-    // 1. Get the MaaS BFF client from context (set by AttachBFFClient middleware)
-    maasClient := bffclient.GetClient(ctx, bffclient.BFFTargetMaaS)
-    if maasClient == nil {                         // Target BFF not configured or unavailable
-        app.errorResponse(w, r, &integrations.HTTPError{
-            StatusCode: http.StatusServiceUnavailable,
-            ErrorResponse: integrations.ErrorResponse{
-                Code:    "service_unavailable",
-                Message: "MaaS BFF is not available",
-            },
-        })
-        return
-    }
-
-    // 2. Parse the incoming request
-    var tokenRequest models.MaaSTokenRequest
-    if r.Body != nil && r.ContentLength != 0 {     // Only parse if there's a body
-        if err := app.ReadJSON(w, r, &tokenRequest); err != nil {
-            app.badRequestResponse(w, r, err)
-            return
-        }
-    }
-
-    // 3. Call the MaaS BFF -- one line does the HTTP round-trip
-    var bffResponse models.MaaSBFFTokenResponse
-    err := maasClient.Call(ctx, "POST", "/tokens", // POST to the maas BFF's /tokens endpoint
-        models.MaaSBFFTokenRequest{Expiration: tokenRequest.ExpiresIn}, // Request body
-        &bffResponse)                              // Response decoded into this struct
-    if err != nil {
-        app.handleBFFClientError(w, r, err)        // Maps BFF errors to HTTP responses
-        return
-    }
-
-    // 4. Re-wrap the response in our envelope and return
-    err = app.WriteJSON(w, http.StatusCreated,
-        Envelope[models.MaaSBFFTokenResponseData, None]{Data: bffResponse.Data}, nil)
-    if err != nil {
-        app.serverErrorResponse(w, r, err)
-    }
-}
-```
-
-What just happened? The gen-ai BFF received a request from the browser, turned around and called the maas BFF's `/tokens` endpoint, then returned the result to the browser. The browser never talks to the maas BFF directly.
-
-The `AttachBFFClient` middleware (same pattern as `AttachPipelineServerClient` from the [Middleware](./middleware) chapter) creates the client per-request and injects it into context:
-
-```go
-// Simplified from bffclient/middleware.go
-func AttachBFFClient(factory BFFClientFactory, target BFFTarget,
-) func(next httprouter.Handle) httprouter.Handle {
-    return func(next httprouter.Handle) httprouter.Handle {
-        return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-            ctx := r.Context()                         // Get context from the request
-
-            // Extract the user's auth token from context
-            var authToken string
-            if identity, ok := ctx.Value(
-                constants.RequestIdentityKey,
-            ).(*integrations.RequestIdentity); ok && identity != nil {
-                authToken = identity.Token          // Forward the USER's token, not a service account
-            }
-
-            // Create a client that will call the target BFF as this user
-            client := factory.CreateClient(target, authToken)
-
-            // Attach to context for the handler
-            ctx = context.WithValue(ctx,
-                constants.BFFClientKey(constants.BFFTarget(target)), client)
-            next(w, r.WithContext(ctx), ps)
-        }
-    }
-}
-```
-
-The critical detail: the calling BFF **forwards the user's token**, not its own service account credentials. The maas BFF receives the same token the browser sent, runs its own auth middleware, and enforces RBAC for that specific user. No privilege escalation. Service discovery uses K8s DNS -- the URL is built from service name, namespace, and port (e.g., `http://odh-dashboard.opendatahub.svc.cluster.local:8243/api/v1`). In dev mode, override with `DevOverrideURL` pointing at `localhost`.
-
-::: warning Error Envelope Compatibility
-Both BFFs use the same error envelope format (`{"error": {"code": "...", "message": "..."}}`). The `handleBFFClientError` function maps the target BFF's error codes to appropriate HTTP status codes for the browser. If you're adding a new inter-BFF integration, make sure the target BFF's error format matches -- otherwise the calling BFF can't parse the error details.
-:::
+➡️ **[Inter-BFF Communication](./inter-bff-communication)** -- the full deep dive.
 
 ## Goroutines: Concurrent Service Calls
 
@@ -289,5 +188,6 @@ These three patterns -- SSE streaming, inter-BFF calls, and goroutines -- build 
 ::: info See Also
 - [Writing Handlers](./handlers) -- the standard request-response pattern these build on
 - [Integrations](./integrations) -- how service clients are created and injected
+- [Inter-BFF Communication](./inter-bff-communication) -- the full BFF-to-BFF deep dive
 - [Middleware Chain](./middleware) -- the middleware that runs before any of these patterns
 :::
