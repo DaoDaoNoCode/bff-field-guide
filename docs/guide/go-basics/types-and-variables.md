@@ -173,6 +173,48 @@ Go's `const` is like TypeScript's, but stricter: values must be known at compile
 
 </div>
 
+## Named-Type Enums -- Go's String-Literal Unions
+
+Go has no `enum` keyword. When you want "one of a fixed set of strings," the idiom is a **named string type** plus a `const` block of allowed values. It's the direct analog of a TypeScript string-literal union.
+
+In TypeScript:
+
+```ts
+type DeploymentMode = 'Sidecar' | 'Standalone';   // union of string literals
+
+let mode: DeploymentMode = 'Sidecar';
+mode = 'Cluster';                                   // ❌ compile error: not in the union
+```
+
+In Go:
+
+```go
+type DeploymentMode string                          // a distinct type "based on" string
+
+const (
+    DeploymentModeSidecar    DeploymentMode = "Sidecar"
+    DeploymentModeStandalone DeploymentMode = "Standalone"
+)
+
+var mode DeploymentMode = DeploymentModeSidecar     // use the constant, not the raw string
+```
+
+The `type DeploymentMode string` line creates a *new named type* whose underlying type is `string`. You get the ergonomics of a string (you can compare it, print it, use it as a map key) but a distinct type the compiler tracks separately.
+
+::: warning The One Gap vs TypeScript
+Go's version is looser in exactly one spot: `mode = "Cluster"` (a raw string literal) **compiles**, because an untyped string constant converts to `DeploymentMode` automatically. TypeScript would reject it. This is why real codebases push the constraint further down — the `dashboard-operator` puts a `// +kubebuilder:validation:Enum=Sidecar;Standalone` marker on the type so the *Kubernetes API server* rejects any value outside the set. Compile-time-plus-admission-time beats compile-time alone.
+:::
+
+You'll see this pattern all over Go code that models states: the operator's `ModulePhase` (`Deployed`/`NotDeployed`/`Degraded`/`Disabled`) and `DeploymentMode` are exactly this, and we walk through them in [The Dashboard CRD](/guide/operator/the-crd).
+
+<div class="checkpoint">
+
+#### Checkpoint
+
+No `enum` keyword. Model a fixed set of string values as a **named string type** (`type X string`) plus a `const` block. It's a string-literal union — with a small looseness the codebase tightens using validation markers.
+
+</div>
+
 ## Basic Types -- Go vs TypeScript
 
 Here's where things start to diverge from TypeScript in an important way. TypeScript has one numeric type: `number`. Go has many. Let's map them out.

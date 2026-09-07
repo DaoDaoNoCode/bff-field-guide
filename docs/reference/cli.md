@@ -378,6 +378,96 @@ darwin
 arm64
 ```
 
+## Make Targets (Operator & BFF)
+
+The BFFs and the `dashboard-operator` both drive their day-to-day workflow through a `Makefile` rather than raw `go` commands. Run these from the module's own directory (`dashboard-operator/` for the operator, `packages/<name>/bff/` for a BFF). See [Part 6: Make Targets](/guide/workflow/make-targets) for the full walkthrough.
+
+### `make build` / `make test` / `make lint`
+
+The universal trio. `make build` compiles, `make test` runs the suite (the operator runs it with the race detector), `make lint` runs `golangci-lint`.
+
+**npm equivalent:** `npm run build` / `npm test` / `npm run lint`
+
+```bash
+cd dashboard-operator
+make build                                     # Compile the manager binary
+make test                                      # Run unit + envtest suites
+make lint                                      # golangci-lint v2
+```
+
+---
+
+### `make generate` / `make manifests`
+
+Operator-only. **Run these after editing any type in `api/v1alpha1/`.** `make generate` regenerates the `zz_generated.deepcopy.go` DeepCopy methods; `make manifests` regenerates the CRD YAML under `config/crd/bases/` from your kubebuilder markers. Forgetting them is the single most common operator mistake.
+
+**npm equivalent:** None — there is no codegen step in the BFF/React world quite like this.
+
+```bash
+cd dashboard-operator
+make generate                                  # Regenerate DeepCopy methods (controller-gen)
+make manifests                                 # Regenerate CRD YAML from // +kubebuilder markers
+make sync-chart-crds                           # Copy generated CRDs into the Helm chart
+make chart-validate                            # Lint/validate the Helm chart
+```
+
+---
+
+### `controller-gen` / `setup-envtest`
+
+The two tools behind the operator's codegen and tests. You rarely call them directly — the `Makefile` installs and invokes them — but you'll see them in CI and setup.
+
+```bash
+# Installed and run for you by `make generate` / `make manifests`
+controller-gen object:headerFile=hack/boilerplate.go.txt paths="./..."   # DeepCopy
+controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
+
+# envtest downloads a real kube-apiserver + etcd for integration tests
+setup-envtest use 1.31.x                        # Fetch the test binaries
+KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.31.x)" go test ./internal/controller/...
+```
+
+See [Testing the Operator](/guide/operator/testing) for what envtest actually does.
+
+## Container Builds (Docker / Podman)
+
+The operator and every module ship as container images. `docker` and `podman` are drop-in compatible for these commands — use whichever you have.
+
+### `make docker-build` / `docker build`
+
+```bash
+cd dashboard-operator
+make docker-build IMG=quay.io/you/odh-dashboard-operator:dev   # Build via the Makefile
+
+# Or build directly from the repo root (note the -f path and root context):
+docker build -t quay.io/you/odh-dashboard-operator:dev -f dashboard-operator/Dockerfile .
+podman build -t quay.io/you/odh-dashboard-operator:dev -f dashboard-operator/Dockerfile .
+```
+
+::: warning Apple Silicon → x86 Cluster
+Your Mac is `arm64`; the cluster is almost certainly `amd64`. Always cross-compile or the pod will crash with an `exec format error`:
+
+```bash
+docker build --platform linux/amd64 -t quay.io/you/odh-dashboard-operator:dev \
+  -f dashboard-operator/Dockerfile .
+```
+:::
+
+---
+
+### Deploying with Helm & `oc`
+
+```bash
+cd dashboard-operator
+oc apply -f config/crd/bases/                   # Install the Dashboard CRD first
+helm install dashboard charts/dashboard/ -n opendatahub \
+  --set image.repository=quay.io/you/odh-dashboard-operator \
+  --set image.tag=dev                           # Install the operator
+oc get dashboard                                # Watch the CR's status/conditions
+```
+
+For running the operator locally against a cluster (dev mode), see [Build & Deploy the Operator](/tutorials/build-and-deploy-operator).
+
 ## The `./...` Pattern
 
 Many Go commands accept `./...` as a path argument. It means "the current directory and all subdirectories, recursively." This is the single most important Go CLI pattern to remember:

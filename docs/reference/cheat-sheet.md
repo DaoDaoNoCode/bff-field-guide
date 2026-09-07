@@ -282,3 +282,48 @@ err := json.Unmarshal(data, &user)             // & passes the address so Unmars
 | `npm install` | `go mod download` | Download all dependencies |
 | `npm install pkg` | `go get pkg@latest` | Add or update a dependency |
 | `npm prune` | `go mod tidy` | Remove unused deps, add missing ones |
+
+## Operator Patterns (controller-runtime)
+
+These show up once you're in the `dashboard-operator` (Parts 4–6). There's no direct TypeScript equivalent for most — the closest mental model is React's render loop: you declare desired state, and something keeps reality in sync.
+
+| Concept | Go | What it does |
+|---|---|---|
+| Reconcile signature | `func (r *R) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error)` | The one method every controller implements |
+| Requeue after delay | `return ctrl.Result{RequeueAfter: 30 * time.Second}, nil` | Ask to be called again later (not an error) |
+| Requeue on error | `return ctrl.Result{}, err` | Non-nil error → automatic exponential backoff requeue |
+| Done, no requeue | `return ctrl.Result{}, nil` | Success — don't requeue until something changes |
+| Fetch the CR | `r.Get(ctx, req.NamespacedName, &dashboard)` | Read current state (from the cache) |
+| Ignore not-found | `client.IgnoreNotFound(err)` | The CR was deleted — nothing to do |
+| Watch owned resources | `.Owns(&appsv1.Deployment{})` | Re-reconcile when a child Deployment changes |
+| Server-Side Apply | `r.Patch(ctx, obj, client.Apply, client.FieldOwner("dashboard-operator"))` | Declare desired fields; server merges by owner |
+
+### Struct embedding (composition, not inheritance)
+
+```go
+type DashboardReconciler struct {
+    client.Client                       // Embedded — r.Get/List/Create/Patch are promoted
+    Scheme *runtime.Scheme              // Named field
+}
+// Now: r.Get(ctx, key, &obj) works directly — no r.Client.Get needed
+```
+
+### Named-type "enums"
+
+```go
+type DeploymentMode string             // A named string type used like a TS string-literal union
+
+const (                                 // The allowed values (like: type Mode = 'sidecar' | 'standalone')
+    DeploymentModeSidecar    DeploymentMode = "sidecar"
+    DeploymentModeStandalone DeploymentMode = "standalone"
+)
+```
+
+### Generics (the response Envelope)
+
+```go
+type Envelope[D any, M any] struct {    // Like TS: type Envelope<D, M> = { data: D; meta?: M }
+    Data D `json:"data"`
+    Meta M `json:"meta,omitempty"`
+}
+```

@@ -46,9 +46,15 @@ go build ./...            # Compile everything -- should produce zero output
 - [x] **VS Code** with the [Go extension](https://marketplace.visualstudio.com/items?itemName=golang.go) installed and configured
 - [x] You have read **Part 1** (Go for TypeScript Devs), **Part 2** (BFF Architecture), and **Part 3** (BFF Deep Dive) -- or at least the sections on types, structs, functions, error handling, JSON, and HTTP servers
 
+::: info Tutorials 7–9 Need a Bit More
+The BFF tutorials (1–6) need only Go. The **Modules & Operator tutorials** go further: Tutorial 7 uses `npm` and the `mod-arch-installer`, and Tutorials 8–9 touch the `dashboard-operator` and (for deploy/dev-mode steps) a cluster with `oc`, `helm`, and Docker or Podman. Each of those tutorials lists its own prerequisites up front -- don't worry about them until you get there. Read Parts 4–6 first if you're going the operator route.
+:::
+
 ## The Tutorials
 
 Work through these in order. Each one builds on concepts from the previous one. Skipping ahead is like skipping to `useEffect` before learning `useState` -- technically possible, but you will be confused.
+
+**BFF Tutorials** -- start here. Everything runs in `packages/automl/bff/` and needs nothing but Go.
 
 | # | Tutorial | What You Will Build | Time |
 |---|---------|-------------------|------|
@@ -57,6 +63,15 @@ Work through these in order. Each one builds on concepts from the previous one. 
 | 3 | [Writing Handler Tests](./writing-tests) | Go unit tests using `httptest` and table-driven patterns -- the Go equivalent of Jest | ~25 min |
 | 4 | [Mock Clients](./mock-clients) | A mock implementation of a service interface -- Go's answer to `jest.mock()` | ~20 min |
 | 5 | [Contract Tests](./contract-tests) | A TypeScript contract test that validates your BFF endpoint against an OpenAPI schema | ~15 min |
+| 6 | [Inter-BFF Communication](./inter-bff-communication) | Wire the `bffclient` package so one BFF calls another, with token forwarding and mock mode | ~30 min |
+
+**Modules & Operator Tutorials** -- the modular-architecture side. These touch the frontend host, the operator, and (for 8–9) a cluster.
+
+| # | Tutorial | What You Will Build | Time |
+|---|---------|-------------------|------|
+| 7 | [Onboard a New Module](./onboard-a-module) | A brand-new federated module scaffolded with `mod-arch-installer` and registered in the host | ~40 min |
+| 8 | [Register a Module in the Operator](./register-module-in-operator) | Standalone manifests plus the operator registry entry that makes the module deployable | ~35 min |
+| 9 | [Build & Deploy the Operator](./build-and-deploy-operator) | The operator container image, a Helm install, and a local dev-mode run against a cluster | ~30 min |
 
 ## What You Will Have When You Finish
 
