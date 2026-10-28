@@ -160,7 +160,7 @@ After a week of writing Go, this transparency starts to feel like a superpower. 
 
 ## How This Guide Is Structured
 
-This guide is organized into six progressive parts, followed by hands-on tutorials and reference material. The first three parts get you fluent in Go and the BFF layer; the last three take you into Kubernetes, the `dashboard-operator`, and the day-to-day development workflow that ties the whole Go side of the repo together. Each part builds on the previous one, so going in order is recommended -- but feel free to jump around if you need to fix a bug _right now_ and can't wait.
+This guide is organized into seven parts, followed by hands-on tutorials and reference material. The first three parts get you fluent in Go and the BFF layer; the next three take you into Kubernetes, the `dashboard-operator`, and the day-to-day development workflow that ties the whole Go side of the repo together. Part 7 is about Core BFF, the dashboard's own Go backend, and the plan to make it replace the Node.js Fastify server. Each part builds on the previous one, so going in order is recommended -- but feel free to jump around if you need to fix a bug _right now_ and can't wait.
 
 ::: tip Already Know Go?
 If you have written Go before (even a little), skip Part 1 and jump straight to [What is a BFF?](./architecture/what-is-bff). Part 1 teaches Go through TypeScript equivalents -- valuable if Go is new to you, but skippable if you already know the basics. You can always circle back to specific chapters (like [JSON](./go-basics/json) or [Interfaces](./go-basics/interfaces)) when you hit something unfamiliar.
@@ -171,7 +171,8 @@ There are two Go codebases in this repo -- the **BFFs** (the per-module HTTP ser
 
 - **BFF track** -- Parts 1 → 2 → 3, then Tutorials 1–6. Everything you need to add endpoints and wire inter-BFF calls.
 - **Operator track** -- Part 1 (skim), then Parts 4 → 5 → 6, then Tutorials 7–9. For controller-runtime, the Dashboard CRD, and deploying the operator.
-- **Full track** -- Parts 1 → 6 in order, then all nine tutorials. The complete tour of the repo's Go realm.
+- **Core BFF track** -- Parts 2 → 3 → 7, with Part 5's federation chapter. For engineers working on Core BFF and the Fastify replacement.
+- **Full track** -- Parts 1 → 7 in order, then all nine tutorials. The complete tour of the repo's Go realm.
 
 Part 6 (Development Workflow) is shared -- come back to it whichever track you take.
 :::
@@ -225,7 +226,7 @@ Walking through real code from the ODH Dashboard repository, explained line by l
 - **Models, DTOs, and the data layer** -- how data is structured as it moves through the BFF
 - **Calling upstream services** -- how the BFF talks to LlamaStack, Model Registry, and other backends
 - **Error handling patterns** and the error envelope -- how errors are structured and returned
-- **Inter-BFF communication** -- how one BFF calls another (and how any BFF calls `core-bff`) with the `bffclient` package, service discovery, and user-token forwarding
+- **Inter-BFF communication** -- how one BFF calls another with the `bffclient` package, service discovery, and user-token forwarding
 
 _After this part, you'll be able to open any BFF in the repo and read it like a book._
 
@@ -257,6 +258,18 @@ The practical glue: how to actually build, test, generate, and debug across the 
 - **The monorepo** -- multiple `go.mod` files, `go.work`, and IDE setup
 - **Make targets** -- the commands you'll run every day
 - **Debugging & gotchas** -- Delve, structured logging, and the mistakes everyone makes once
+
+### Part 7: Core BFF
+
+The dashboard's platform backend in Go -- `distributions/core-bff/bff` -- and the strategy for replacing Fastify with it.
+
+- **Meet Core BFF** -- what it is, where it already runs, and why it replaces Fastify
+- **Architecture** -- flags, bootstrap, the handler tree, auth guards, the Kubernetes, WebSocket and module proxies, static serving
+- **Across distributions** -- the RHOAI three-container pod, RHAII on xKS and the MaaS Portal
+- **Fastify today** -- every Fastify route, cache and side job, and what Core BFF already covers
+- **Replacing Fastify** -- the three initiatives, their decisions, the gaps, a suggested order and the definition of done
+
+_After this part, you'll know what has to happen before the dashboard pod can drop its Node.js container._
 
 ### Tutorials
 

@@ -96,16 +96,17 @@ You now know the three tag patterns: `json:"name"` (required), `json:"name,omite
 
 ### Simple Response Model
 
-Let's start simple -- a secret list item from the automl BFF:
+Let's start simple -- a secret list item. automl's `models.SecretListItem` is a type alias (`type SecretListItem = kubernetes.SecretInfo`) for this struct in the shared `packages/autox-core/services/kubernetes/models.go`:
 
 ```go
-type SecretListItem struct {                       // A secret returned by the list endpoint
-    UUID        string            `json:"uuid"`    // Always present -- the unique ID
-    Name        string            `json:"name"`    // Always present -- the secret name
-    Type        string            `json:"type,omitempty"` // Optional -- omitted if empty string
-    Data        map[string]string `json:"data"`    // Always present -- key/value pairs
-    DisplayName string            `json:"displayName,omitempty"` // Optional -- human-readable name
-    Description string            `json:"description,omitempty"` // Optional -- description
+type SecretInfo struct {                           // A secret returned by the list endpoint
+    UUID              string            `json:"uuid"`    // Always present -- the unique ID
+    Name              string            `json:"name"`    // Always present -- the secret name
+    Type              string            `json:"type,omitempty"` // Optional -- omitted if empty string
+    Data              map[string]string `json:"data"`    // Always present -- key/value pairs
+    DatabaseProviders []string          `json:"databaseProviders,omitempty"` // Optional list
+    DisplayName       string            `json:"displayName,omitempty"` // Optional -- human-readable name
+    Description       string            `json:"description,omitempty"` // Optional -- description
 }
 ```
 
@@ -117,6 +118,7 @@ interface SecretListItem {                         // Same shape in TypeScript
   name: string;                                    // Required
   type?: string;                                   // omitempty = optional
   data: Record<string, string>;                    // map[string]string = Record<string, string>
+  databaseProviders?: string[];                    // []string + omitempty = optional array
   displayName?: string;                            // Optional
   description?: string;                            // Optional
 }

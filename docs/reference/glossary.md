@@ -455,9 +455,9 @@ The top-level custom resource the ODH/RHOAI platform operator reconciles. Its `s
 
 ### Deployment Mode (Sidecar vs Standalone)
 
-How the operator lays out module pods. **Sidecar** (legacy) runs every BFF as a container in one pod. **Standalone** (current) gives each enabled module its own Deployment, ServiceAccount, and NetworkPolicy. Controlled by `spec.deploymentMode`.
+Historical. The operator used to support **Sidecar** (every BFF as a container in the dashboard pod) and **Standalone** (one Deployment per module) through `spec.deploymentMode`. Sidecar mode and the field were removed: today every enabled module gets its own Deployment, Service, ServiceAccount and NetworkPolicy. You may still see the terms in older material.
 
-**Where you will see it:** [The Reconciler](/guide/operator/reconciler).
+**Where you will see it:** [Modules & Federation](/guide/operator/modules-and-federation).
 
 ---
 

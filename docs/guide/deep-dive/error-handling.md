@@ -136,7 +136,7 @@ func (app *App) badRequestResponse(                // 400 Bad Request -- invalid
 Missing or invalid credentials:
 
 ::: info Signature Varies by BFF
-The `unauthorizedResponse` signature differs: gen-ai, agent-ops, mlflow, and core-bff take `err error`, while automl and autorag take `message string`. The behavior is the same — the difference is only in the parameter type.
+The `unauthorizedResponse` signature differs: gen-ai, agent-ops, mlflow, and [core-bff](/guide/core-bff/) have a method `app.unauthorizedResponse(w, r, err error)`, while automl and autorag have package-level helpers that take the logger and a message: `unauthorizedResponse(logger, w, r, message string)`. The same goes for `badRequestResponse`, `forbiddenResponse` and the rest in automl/autorag. The behavior is the same -- the difference is the receiver and the parameter types.
 :::
 
 ```go

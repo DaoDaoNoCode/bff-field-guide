@@ -1,15 +1,16 @@
 # Testing the Operator
 
-> Most operator logic can be tested with no cluster at all. Here's the ladder — from pure-function unit tests to a real in-process API server.
+> Most operator logic can be tested with no cluster at all. Here's the ladder — from pure-function unit tests to a real in-process API server, and on up to real clusters and chaos.
 
-You learned to test BFF handlers with `httptest` in Part 3 and the tutorials. Operator testing has the same spirit — table-driven, fast, isolated — but adds two tools you haven't met: the **fake client** (an in-memory Kubernetes API) and **envtest** (a real API server in your test process). Reach for the cheapest tool that covers what you're testing.
+You learned to test BFF handlers with `httptest` in Part 3 and the tutorials. Operator testing has the same spirit — table-driven, fast, isolated — but adds tools you haven't met: the **fake client** (an in-memory Kubernetes API), **envtest** (a real API server in your test process), and real-cluster suites. Reach for the cheapest tool that covers what you're testing.
 
 ```
-cheapest ─────────────────────────────────────────────► most realistic
- pure function     fake client            envtest
- (no client)       (in-memory K8s)        (real API server, no kubelet)
- resolveModule…    reconcile logic,       CEL validation, defaulting,
- hash, naming      status updates         admission, real GVK behavior
+cheapest ─────────────────────────────────────────────────────────────────────────► most realistic
+ pure function   fake client       envtest              contract          real-cluster E2E   chaos
+ (no client)     (in-memory K8s)   (-tags=integration)  (live cluster)    (-tags=e2e)        (operator-chaos)
+ resolveModule…  reconcile logic,  CEL, defaulting,     platform contract module lifecycle,  pod kills,
+ hash, naming    status updates    caches, GVKs         conformance       routing, portal    evictions
+ └──── make test ────┘             make test-integration └──────── make test-e2e ────────┘   make test-e2e-chaos
 ```
 
 ## Level 1: Pure functions — the cheapest wins
@@ -88,7 +89,7 @@ cl := fake.NewClientBuilder().
 ```
 
 ::: warning Don't Forget `WithStatusSubresource`
-Without `WithStatusSubresource(&v1alpha1.Dashboard{})`, a call to `r.Status().Update(...)` **silently succeeds without changing anything** — your test passes while asserting nothing. Because the reconciler's whole job culminates in a status update (Step 14), a test missing this line is testing a no-op. This is *the* classic fake-client footgun.
+Without `WithStatusSubresource(&v1alpha1.Dashboard{})`, a call to `r.Status().Update(...)` **silently succeeds without changing anything** — your test passes while asserting nothing. Because the reconciler's whole job culminates in a status update (the last pipeline step), a test missing this line is testing a no-op. This is *the* classic fake-client footgun.
 :::
 
 The fake client is dramatically faster than envtest and covers the vast majority of reconciler logic. You seed the "cluster," run `Reconcile`, and assert on what changed.
@@ -107,10 +108,25 @@ err := k8sClient.Create(ctx, bad)
 require.Error(t, err) // fake client would NOT catch this — envtest does
 ```
 
-envtest needs its binaries installed once (`setup-envtest`), which the operator's Makefile wires up.
+The envtest suites (`deployment_integration_test.go`, `federation_integration_test.go`, `owned_resource_cache_integration_test.go`, ...) start with a build tag:
+
+```go
+//go:build integration
+
+package controller_test
+```
+
+So plain `go test ./...` and `make test` **skip them**. Run them with:
+
+```bash
+cd dashboard-operator
+make test-integration   # setup-envtest v0.24.1, ENVTEST_K8S_VERSION=1.31.0, -tags=integration
+```
+
+The target downloads the API server and etcd binaries through `setup-envtest`, sets `KUBEBUILDER_ASSETS`, and runs `go test -race -tags=integration ./internal/controller/...`. envtest is also where cache-scoping bugs show up: a missing `ManagerCacheOptions` entry fails here, not in a fake-client test.
 
 ::: info Deep Dive: envtest Integration Tests
-The monorepo has a full rule for writing and debugging these: **`docs/envtest-integration-tests.md`** in the repo root (and the `envtest-debug` skill for triaging failures). If you're writing envtest integration tests for the operator, read that first — it covers binary setup, the test harness, and the common failure patterns. The [Development Workflow](/guide/workflow/) part covers the `make` targets that run them.
+The monorepo has a full rule for writing and debugging these: **`docs/envtest-integration-tests.md`** in the repo root (and the `.claude/skills/envtest-debug` skill for triaging failures). For controller changes in general, also read `.claude/rules/operator-controller.md`. If you're writing envtest integration tests for the operator, read that first — it covers binary setup, the test harness, and the common failure patterns. The [Development Workflow](/guide/workflow/) part covers the `make` targets that run them.
 :::
 
 ## `export_test.go`: white-box access without leaking internals
@@ -127,8 +143,14 @@ var MainDashboardDeploymentName = mainDashboardDeploymentName
 // Wrap a method on an unexported receiver.
 func BuildFederationConfigMap(r *DashboardReconciler, statuses map[string]v1alpha1.ModuleStatus,
     dashboard *v1alpha1.Dashboard) (*corev1.ConfigMap, error) {
-    return r.buildFederationConfigMap(statuses, dashboard)
+    return r.buildFederationConfigMap(context.Background(), statuses, dashboard)
 }
+
+// Wrap methods on the reconciler, too.
+func (r *DashboardReconciler) ReconcileModuleDemand(ctx context.Context, d *v1alpha1.Dashboard) (map[string]v1alpha1.ModuleStatus, error) {
+    return r.reconcileModuleDemand(ctx, d)
+}
+// ... plus DeleteModuleResources, CleanupLegacyResources, ReconcileNamespacedRBAC, ...
 
 // Override package state for a test, returning a restore closure.
 func SetOperatorDeploymentName(name string) (restore func()) {
@@ -165,6 +187,31 @@ assert.Equal(t, result1, result2)                 // stable — no drift, no chu
 
 If the second reconcile produces different resources or a different `ctrl.Result`, you have a non-idempotent bug — the operator would thrash forever, re-applying changes on every loop. These tests are cheap insurance against the most damaging class of operator bug.
 
+## Levels 4–6: real clusters
+
+Some things no in-process API server can show: pods actually starting, the Gateway routing a request, the MaaS Portal coming up next to the dashboard, the operator surviving its pod being killed. Those tests live in `dashboard-operator/test/e2e/`, behind `//go:build e2e`, and need a real cluster with the operator installed. `test/e2e/README.md` lists the prerequisites and RBAC in detail.
+
+| Level | Entry point | What it checks |
+|---|---|---|
+| **Contract** | `TestE2E_PlatformContractConformance` (`test/e2e/contract_test.go`) | The platform's operand contract against a live install: CEL, the webhook, routing, operands, lifecycle |
+| **Real-cluster E2E** | `make test-e2e` | Module lifecycle, routing conformance, operand health, MaaS Portal observability |
+| **Chaos** | `make test-e2e-chaos` | Destructive scenarios driven by operator-chaos (pod deletion, evictions, network policies), run serially |
+
+```bash
+export KUBECONFIG=/abs/path/to/kubeconfig
+export TEST_NAMESPACE=dashboard-operator-e2e   # an existing applications namespace
+make test-e2e                                  # E2E_FIXTURE_MODE=managed by default
+make test-e2e E2E_FIXTURE_MODE=existing        # reuse the installed default-dashboard, read-only
+
+TEST_ENABLE_CHAOS=true make test-e2e-chaos     # also needs TEST_GATEWAY_DOMAIN, TEST_OPERATOR_NAMESPACE
+```
+
+::: warning Fixture Modes Exist Because of the Singleton
+There can be only one `default-dashboard`. `existing` mode uses the one already installed and never changes it. `managed` mode creates and deletes its own, so it needs an isolated cluster where the platform controller that normally creates the Dashboard is scaled down. Never point `managed` mode at a shared cluster.
+:::
+
+The chart has its own Go tests too: `charts/chart_sync_test.go` checks that the CRD and RBAC in the Helm chart stay in sync with `config/`, and `make check-chart-crds` / `make chart-validate` lint and render the chart.
+
 ## Choosing the right level
 
 | You're testing… | Use | Why |
@@ -174,6 +221,9 @@ If the second reconcile produces different resources or a different `ctrl.Result
 | CEL rules, defaulting, admission, GVK behavior | envtest | Only a real API server produces these |
 | Unexported functions | `export_test.go` + any level above | White-box access without leaking internals |
 | Convergence / no-thrash | Idempotency test (fake client) | Reconcile twice, compare |
+| Cache scoping, watches, owned-resource events | envtest (`make test-integration`) | Needs real informers and selectors |
+| Pods, routing, the MaaS Portal, upgrades | Contract / real-cluster E2E | Only a real cluster runs workloads |
+| Resilience to pod loss and disruption | Chaos | Deliberately breaks things |
 
 Default to the cheapest tool that actually exercises the behavior. Reach up the ladder only when the level below can't see what you need to assert.
 
@@ -186,7 +236,8 @@ Default to the cheapest tool that actually exercises the behavior. Reach up the 
 Make sure you can answer these:
 - [ ] Why can `resolveModuleStatuses` be tested with no client at all?
 - [ ] What breaks silently if you forget `WithStatusSubresource` on the fake client?
-- [ ] What does envtest give you that the fake client cannot?
+- [ ] What does envtest give you that the fake client cannot, and why doesn't `make test` run it?
+- [ ] What's the difference between the `managed` and `existing` E2E fixture modes?
 - [ ] What problem does `export_test.go` solve, and why doesn't it leak into the production binary?
 - [ ] How do you prove the reconciler is idempotent?
 

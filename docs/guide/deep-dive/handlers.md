@@ -60,6 +60,10 @@ Let me map each parameter to what you already know:
 
 When I first saw `func (app *App)` at the start of every handler, I thought it was boilerplate noise. It's not -- that `app` gives every handler access to the database, logger, and config without global variables. It's like every Express handler having `this` bound to your application instance.
 
+::: info Handler Structs in automl and autorag
+gen-ai, maas, mlflow and core-bff hang handlers directly off `*App`. automl and autorag split them into per-domain structs -- `*PipelinesHandler`, `*K8sHandler`, `*S3Handler`, `*ModelRegistryHandler` -- each holding only the logger and repository it needs. The signature after the receiver is the same, and the route registers `app.pipelines.PipelineRunHandler` instead of `app.PipelineRunHandler`. Their helpers are package-level functions that take the logger explicitly: `writeJSON(w, status, data, headers)` and `badRequestResponse(logger, w, r, message)`. The examples below come from automl, so you'll see both styles on this page.
+:::
+
 ## Reading Request Data
 
 Before we build a real handler, let's learn how to read the different parts of a request. In Express, everything hangs off `req`. In Go, it's spread across `r`, `ps`, and context values.
@@ -126,7 +130,7 @@ namespace, ok := r.Context().Value(                // Read from request context
 
 identity, ok := r.Context().Value(                 // Read user identity from context
     constants.RequestIdentityKey,                   // Another constant key
-).(*kubernetes.RequestIdentity)                    // Type assertion: "I expect a *RequestIdentity"
+).(*kubernetes.RequestIdentity)                    // gen-ai: *integrations.RequestIdentity
 ```
 
 ::: info Constant Names Vary by BFF
@@ -150,40 +154,33 @@ contentType := r.Header.Get("Content-Type")        // Another header
 You now know how to read every part of a request: URL params (`ps.ByName`), query params (`r.URL.Query().Get`), body (`app.ReadJSON`), context values (`r.Context().Value`), and headers (`r.Header.Get`). Let's put it all together in real handlers.
 :::
 
-## Example 1: GET List Handler
+## Example 1: GET List Handler (automl BFF)
 
-Here's a real handler from the automl BFF that lists secrets in a namespace. I'll show the Express version first, then the Go version:
+Here's a real handler from the automl BFF that lists secrets in a namespace (`internal/api/k8s_handler.go`). I'll show the Express version first, then the Go version:
 
 **Express version:**
 
 ```typescript
 app.get('/api/v1/secrets', async (req, res) => {   // GET handler for secrets
-  // 1. Identity comes from auth middleware
-  const identity = req.user;                       // Set by auth middleware
-  if (!identity) {                                 // Check it exists
-    return res.status(400).json({ error: 'Missing identity' });
-  }
-
-  // 2. Namespace from query string
-  const namespace = req.query.namespace as string;  // Read query param
-  if (!namespace) {                                // Validate
+  // 1. Namespace from auth/namespace middleware
+  const namespace = req.namespace;                 // Set by attachNamespace
+  if (!namespace) {                                // Check it exists
     return res.status(400).json({ error: 'Missing namespace' });
   }
 
-  // 3. Optional filter
+  // 2. Optional filter
   const secretType = req.query.type as string;     // Read optional param
   if (secretType && secretType !== 'storage') {    // Validate if present
     return res.status(400).json({ error: "type must be 'storage' or omitted" });
   }
 
   try {
-    // 4-5. Get client and fetch data
-    const secrets = await secretService.getFilteredSecrets(
-      namespace, identity, secretType              // Call the service layer
-    );
-    // 6. Send response
+    // 3. Fetch data as the user
+    const secrets = await secretService.getFilteredSecrets(namespace, secretType);
+    // 4. Send response
     res.json({ data: secrets });                   // Wrap in envelope
   } catch (err) {
+    if (err.status === 403) return res.status(403).json({ error: 'Forbidden' });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -192,72 +189,60 @@ app.get('/api/v1/secrets', async (req, res) => {   // GET handler for secrets
 **Go version:**
 
 ```go
-func (app *App) GetSecretsHandler(                 // Handler method on App
+// packages/automl/bff/internal/api/k8s_handler.go
+func (h *K8sHandler) GetSecretsHandler(            // Handler method on K8sHandler
     w http.ResponseWriter,                         // Response writer
     r *http.Request,                               // Request
     _ httprouter.Params,                           // No URL params needed (using _ to ignore)
 ) {
-    ctx := r.Context()                             // Get the request context (holds middleware data)
+    ctx := r.Context()                             // The request context (holds middleware data)
 
-    // 1. Get user identity from context (set by InjectRequestIdentity middleware)
-    identity, ok := ctx.Value(                     // Read from context
-        constants.RequestIdentityKey,              // The key constant
-    ).(*kubernetes.RequestIdentity)                 // Type assertion: expect *RequestIdentity
-    if !ok || identity == nil {                    // Check if it was set and is the right type
-        app.badRequestResponse(w, r,               // Send 400 error
-            fmt.Errorf("missing RequestIdentity in context"))
+    // 1. Get namespace from context (set by AttachNamespace middleware)
+    namespace, ok := ctx.Value(constants.NamespaceHeaderParameterKey).(string)
+    if !ok || namespace == "" {                    // Check if it was set
+        badRequestResponse(h.logger, w, r,         // Send 400 error
+            "missing namespace in context - ensure AttachNamespace middleware is used first")
         return                                     // MUST return after sending an error
     }
 
-    // 2. Get namespace from context (set by AttachNamespace middleware)
-    namespace, ok := ctx.Value(                    // Read from context
-        constants.NamespaceQueryParameterKey,      // The key constant
-    ).(string)                                     // Type assertion: expect string
-    if !ok || namespace == "" {                    // Check if it was set
-        app.badRequestResponse(w, r,               // Send 400 error
-            fmt.Errorf("missing namespace in context"))
-        return                                     // Stop processing
-    }
-
-    // 3. Read and validate optional query parameter
+    // 2. Read and validate optional query parameter
     secretType := r.URL.Query().Get("type")        // Read "type" from query string
     if secretType != "" && secretType != "storage" { // Validate if present
-        app.badRequestResponse(w, r,               // Send 400 error
-            fmt.Errorf("query parameter 'type' must be 'storage' or omitted"))
-        return                                     // Stop processing
+        badRequestResponse(h.logger, w, r,
+            "query parameter 'type' must be 'storage' or omitted")
+        return
     }
 
-    // 4. Get a Kubernetes client
-    client, err := app.kubernetesClientFactory.GetClient(ctx) // Create/get a K8s client
-    if err != nil {                                // Check for client creation failure
-        app.serverErrorResponse(w, r,              // Send 500 error
-            fmt.Errorf("failed to get Kubernetes client: %w", err))
-        return                                     // Stop processing
+    // 3. Call the repository; the K8s service reads the user's identity from ctx
+    secrets, err := h.repo.GetFilteredSecrets(h.k8sService, ctx, namespace, secretType)
+    if err != nil {                                // Map typed errors to HTTP codes
+        switch {
+        case errors.Is(err, kubernetes.ErrNotFound):
+            notFoundResponseWithMessage(h.logger, w, r,
+                fmt.Sprintf("namespace '%s' does not exist or is not accessible", namespace))
+        case errors.Is(err, kubernetes.ErrForbidden):
+            forbiddenResponse(h.logger, w, r, "insufficient permissions to access secrets in this namespace")
+        case errors.Is(err, kubernetes.ErrUnauthorized):
+            unauthorizedResponse(h.logger, w, r, "access unauthorized")
+        default:
+            serverErrorResponse(h.logger, w, r, err)
+        }
+        return
     }
 
-    // 5. Call the repository to get data
-    secrets, err := app.repositories.Secret.GetFilteredSecrets( // Business logic layer
-        client, ctx, namespace, identity, secretType, // Pass everything it needs
-    )
-    if err != nil {                                // Check for data fetch failure
-        app.serverErrorResponse(w, r, err)         // Send 500 error
-        return                                     // Stop processing
-    }
-
-    // 6. Write the JSON response
-    err = app.WriteJSON(w, http.StatusOK,          // Write 200 OK with JSON body
-        SecretsEnvelope{Data: secrets}, nil)        // Wrap data in envelope
+    // 4. Write the JSON response
+    err = writeJSON(w, http.StatusOK, SecretsEnvelope{Data: secrets}, nil)
     if err != nil {                                // Check if response writing failed
-        app.serverErrorResponse(w, r, err)         // Send 500 if it did
+        serverErrorResponse(h.logger, w, r, err)   // Send 500 if it did
     }
 }
 ```
 
-The structure is nearly identical to Express. The biggest difference is error handling: Express uses `try/catch`, while Go checks each error explicitly with `if err != nil`. Every error branch sends a response and returns immediately. There's no exception unwinding -- you handle each failure at the point it occurs.
+The structure is nearly identical to Express. The biggest difference is error handling: Express uses `try/catch`, while Go checks each error explicitly with `if err != nil`. Every error branch sends a response and returns immediately. There's no exception unwinding -- you handle each failure at the point it occurs. The `errors.Is(err, kubernetes.ErrForbidden)` switch is the autox-core convention: the shared K8s service returns typed sentinel errors, and the handler turns them into status codes.
 
 ## Example 2: GET by ID Handler (automl BFF)
 
-Handlers that read URL parameters use `ps.ByName()`:
+Handlers that read URL parameters use `ps.ByName()` (automl names the argument `params`):
 
 **Express version:**
 
@@ -265,7 +250,7 @@ Handlers that read URL parameters use `ps.ByName()`:
 app.get('/api/v1/pipeline-runs/:runId',            // Route with URL parameter
   async (req, res) => {
     const runId = req.params.runId;                // Read the URL param
-    const run = await pipelineClient.getPipelineRun(runId); // Fetch it
+    const run = await pipelinesRepo.getManagedRun(req.namespace, runId); // Fetch it
     res.json({ data: run });                       // Send response
   }
 );
@@ -274,54 +259,48 @@ app.get('/api/v1/pipeline-runs/:runId',            // Route with URL parameter
 **Go version:**
 
 ```go
-func (app *App) PipelineRunHandler(                // Handler for GET /api/v1/pipeline-runs/:runId
+// packages/automl/bff/internal/api/pipelines_handler.go
+func (h *PipelinesHandler) PipelineRunHandler(     // Handler for GET /api/v1/pipeline-runs/:runId
     w http.ResponseWriter,                         // Response writer
     r *http.Request,                               // Request
-    ps httprouter.Params,                          // URL params -- this time we need them!
+    params httprouter.Params,                      // URL params -- this time we need them!
 ) {
-    ctx := r.Context()                             // Get the request context
+    namespace, ok := r.Context().Value(constants.NamespaceHeaderParameterKey).(string)
+    if !ok || namespace == "" {
+        badRequestResponse(h.logger, w, r, "missing namespace in context - ensure AttachNamespace middleware is used first")
+        return
+    }
 
-    // Read :runId from the URL path
-    runID := ps.ByName("runId")                    // Like req.params.runId in Express
+    runID := params.ByName("runId")                // Like req.params.runId in Express
     if runID == "" {                               // Check if it's empty
-        app.badRequestResponse(w, r,               // Send 400
-            fmt.Errorf("missing run ID"))
+        badRequestResponse(h.logger, w, r, "missing runId parameter")
         return                                     // Stop
     }
 
-    // Get the pipeline server client from context (set by AttachPipelineServerClient middleware)
-    pipelineClient, ok := ctx.Value(               // Read from context
-        constants.PipelineServerClientKey,          // The key set by middleware
-    ).(pipelineserver.PipelineServerClientInterface) // Type assertion
-    if !ok || pipelineClient == nil {              // Check if middleware set it
-        app.badRequestResponse(w, r,               // Send 400 if missing
-            fmt.Errorf("missing pipeline server client in context"))
-        return                                     // Stop
-    }
-
-    // Fetch the pipeline run
-    run, err := pipelineClient.GetPipelineRun(ctx, runID) // Call the upstream service
+    // The repository discovers the pipeline server and calls it as the user
+    run, err := h.repo.GetManagedRun(r.Context(), namespace, runID)
     if err != nil {                                // Check for errors
-        app.serverErrorResponse(w, r, err)         // Send 500
+        h.mapPipelineError(w, r, err)              // Typed errors → 400/403/404/503...
         return                                     // Stop
     }
 
     // Write the response
-    err = app.WriteJSON(w, http.StatusOK,          // 200 OK
-        Envelope[*models.PipelineRun, None]{Data: run}, // Wrap in envelope
-        nil)                                       // No extra headers
-    if err != nil {                                // Check if writing failed
-        app.serverErrorResponse(w, r, err)         // Send 500
+    if err := writeJSON(w, http.StatusOK, PipelineRunEnvelope{Data: run}, nil); err != nil {
+        serverErrorResponse(h.logger, w, r, err)   // Send 500
     }
 }
 ```
 
+`PipelineRunEnvelope` is a named alias declared at the top of the file: `type PipelineRunEnvelope Envelope[*models.PipelineRun, None]`.
+
 The route was registered as:
 
 ```go
-apiRouter.GET("/api/v1/pipeline-runs/:runId",      // :runId becomes a URL parameter
-    /* middleware chain */                          // AttachNamespace, RequireAccess, etc.
-    app.PipelineRunHandler)                        // This handler
+// packages/automl/bff/internal/api/app.go
+apiRouter.GET(PipelineRunsPath+"/:runId",          // :runId becomes a URL parameter
+    app.mw.AttachNamespace(                        // Namespace from ?namespace=
+        app.mw.RequireAccessToService(             // SSAR on DSPipelineApplications
+            app.pipelines.PipelineRunHandler)))    // This handler
 ```
 
 ## Example 3: POST Handler (automl BFF)
@@ -333,14 +312,9 @@ POST handlers need to read and parse the request body. This is where Go's explic
 ```typescript
 app.post('/api/v1/pipeline-runs',                  // POST handler
   async (req, res) => {
-    const request = req.body as CreatePipelineRunRequest; // Body already parsed by middleware
-
-    if (!request.pipelineType) {                   // Validate
-      return res.status(400).json({ error: 'pipelineType is required' });
-    }
-
-    const run = await pipelineRunService.create(request); // Create the resource
-    res.status(201).json({ data: run });           // 201 Created
+    const request = req.body as CreateAutoMLRunRequest; // Body already parsed by middleware
+    const run = await pipelinesRepo.createRun(req.namespace, request); // Create the resource
+    res.status(200).json({ data: run });
   }
 );
 ```
@@ -348,65 +322,58 @@ app.post('/api/v1/pipeline-runs',                  // POST handler
 **Go version:**
 
 ```go
-func (app *App) CreatePipelineRunHandler(          // POST handler for creating pipeline runs
+// packages/automl/bff/internal/api/pipelines_handler.go (trimmed)
+func (h *PipelinesHandler) CreatePipelineRunHandler(
     w http.ResponseWriter,                         // Response writer
     r *http.Request,                               // Request (body is in here)
-    ps httprouter.Params,                          // URL params
+    _ httprouter.Params,                           // URL params (unused)
 ) {
-    ctx := r.Context()                             // Get request context
-
-    // Read and parse the JSON request body
-    var request models.CreatePipelineRunRequest     // Declare a variable with the expected type
-    err := app.ReadJSON(w, r, &request)            // Parse JSON body into the struct
-    if err != nil {                                // Check for parse errors
-        app.badRequestResponse(w, r, err)          // Send 400 with descriptive error
-        return                                     // Stop processing
+    namespace, ok := r.Context().Value(constants.NamespaceHeaderParameterKey).(string)
+    if !ok || namespace == "" {
+        badRequestResponse(h.logger, w, r, "missing namespace in context - ensure AttachNamespace middleware is used first")
+        return
     }
 
-    // Validate required fields
-    if request.PipelineType == "" {                // Check for required field
-        app.badRequestResponse(w, r,               // Send 400
-            fmt.Errorf("pipelineType is required"))
-        return                                     // Stop
+    // Read and parse the JSON request body -- strictly
+    r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes) // 10 MiB cap
+    var req models.CreateAutoMLRunRequest          // Declare a variable with the expected type
+    decoder := json.NewDecoder(r.Body)
+    decoder.DisallowUnknownFields()                // Reject typos in field names
+    if err := decoder.Decode(&req); err != nil {
+        var maxBytesErr *http.MaxBytesError
+        if errors.As(err, &maxBytesErr) {          // Body too big → 413
+            payloadTooLargeResponse(h.logger, w, r, "request body exceeds maximum size")
+            return
+        }
+        badRequestResponse(h.logger, w, r, fmt.Sprintf("invalid request body: %s", err))
+        return
     }
 
-    // Get clients from context (set by middleware)
-    pipelineClient, ok := ctx.Value(               // Read pipeline client from context
-        constants.PipelineServerClientKey,
-    ).(pipelineserver.PipelineServerClientInterface)
-    if !ok || pipelineClient == nil {              // Check if middleware set it
-        app.badRequestResponse(w, r,               // Send 400
-            fmt.Errorf("missing pipeline server client"))
-        return                                     // Stop
-    }
+    // (trimmed: extra validation for time-series runs, which reads the CSV schema from S3)
 
     // Create the resource through the business logic layer
-    run, err := app.repositories.PipelineRun.Create( // Call repository
-        pipelineClient, ctx, &request,             // Pass client, context, and request
-    )
-    if err != nil {                                // Check for creation failure
-        app.serverErrorResponse(w, r, err)         // Send 500
-        return                                     // Stop
+    run, err := h.repo.CreateRun(r.Context(), namespace, req)
+    if err != nil {                                // Validation and upstream errors
+        h.mapPipelineError(w, r, err)
+        return
     }
 
-    // Return 201 Created with the new resource
-    err = app.WriteJSON(w, http.StatusCreated,     // 201 Created (not 200 OK!)
-        Envelope[*models.PipelineRun, None]{Data: run}, // Wrap in envelope
-        nil)                                       // No extra headers
-    if err != nil {                                // Check if writing failed
-        app.serverErrorResponse(w, r, err)         // Send 500
+    if err := writeJSON(w, http.StatusOK, CreatePipelineRunEnvelope{Data: run}, nil); err != nil {
+        serverErrorResponse(h.logger, w, r, err)   // Send 500
     }
 }
 ```
 
-The critical difference from Express is this line:
+The critical difference from Express is the decode block:
 
 ```go
-var request models.CreatePipelineRunRequest        // Declare a variable with the expected struct type
-err := app.ReadJSON(w, r, &request)                // Parse JSON body into it (like JSON.parse + validation)
+var req models.CreateAutoMLRunRequest              // Declare a variable with the expected struct type
+decoder := json.NewDecoder(r.Body)                 // Like JSON.parse...
+decoder.DisallowUnknownFields()                    // ...plus strict schema checking
+err := decoder.Decode(&req)                        // Parse JSON body into it
 ```
 
-In Express, `body-parser` middleware parses the body for you and it appears on `req.body`. In Go, you parse it explicitly with `ReadJSON`. The advantage: `ReadJSON` rejects unknown fields, checks for malformed JSON, limits body size, and returns descriptive errors. It's like having a strict body parser built into every handler.
+In Express, `body-parser` middleware parses the body for you and it appears on `req.body`. In Go, you parse it explicitly. gen-ai and core-bff wrap this in an `app.ReadJSON(w, r, &req)` helper (see below) that also limits body size and returns descriptive errors; automl writes it inline with its own 10 MiB limit. Note that this endpoint answers `200 OK`, not `201 Created` -- REST conventions are not uniform across BFFs, so check the OpenAPI spec.
 
 ## Beyond POST: PUT, PATCH, and DELETE
 
@@ -417,37 +384,39 @@ You have seen GET (read) and POST (create). The other HTTP methods follow the sa
 DELETE handlers are the simplest write operation. No request body needed -- the resource ID comes from the URL:
 
 ```go
-func (app *App) DeletePipelineRunHandler(
+// packages/automl/bff/internal/api/pipelines_handler.go
+func (h *PipelinesHandler) DeletePipelineRunHandler(
     w http.ResponseWriter,
     r *http.Request,
-    ps httprouter.Params,                          // URL params -- this time we use them
+    params httprouter.Params,                      // URL params -- this time we use them
 ) {
-    runID := ps.ByName("runId")                    // read :runId from the URL path
+    namespace, ok := r.Context().Value(constants.NamespaceHeaderParameterKey).(string)
+    if !ok || namespace == "" {
+        badRequestResponse(h.logger, w, r, "missing namespace in context - ensure AttachNamespace middleware is used first")
+        return
+    }
+    runID := params.ByName("runId")                // read :runId from the URL path
     if runID == "" {
-        app.badRequestResponse(w, r, fmt.Errorf("missing run ID"))
+        badRequestResponse(h.logger, w, r, "missing runId parameter")
         return
     }
 
-    client := getPipelineClient(r.Context())       // get client from context (set by middleware)
-    err := client.DeletePipelineRun(r.Context(), runID)
-    if err != nil {
-        app.serverErrorResponse(w, r, err)
+    if err := h.repo.DeleteRun(r.Context(), namespace, runID); err != nil {
+        h.mapPipelineError(w, r, err)
         return
     }
 
-    app.WriteJSON(w, http.StatusOK,                // 200 OK (some APIs use 204 No Content)
-        Envelope[None, None]{}, nil)               // empty envelope -- the resource is gone
+    w.WriteHeader(http.StatusOK)                   // 200 with an empty body (some APIs use 204)
 }
 ```
 
 The route registration uses `apiRouter.DELETE`:
 
 ```go
-apiRouter.DELETE("/api/v1/pipeline-runs/:runId",
-    app.AttachNamespace(
-        app.RequireAccessToPipelineServers(
-            app.AttachPipelineServerClient(
-                app.DeletePipelineRunHandler))))
+apiRouter.DELETE(PipelineRunsPath+"/:runId",
+    app.mw.AttachNamespace(
+        app.mw.RequireAccessToService(
+            app.pipelines.DeletePipelineRunHandler)))
 ```
 
 ### Quick Reference: Methods at a Glance
@@ -499,7 +468,7 @@ grep -r "LlamaStackModelsHandler" packages/gen-ai/bff/internal/api/app.go
 
 ### The WriteJSON Helper
 
-Every BFF has a `WriteJSON` helper in `internal/api/helpers.go`:
+Every BFF has a JSON-writing helper in `internal/api/helpers.go`. In gen-ai, maas and core-bff it is a method, `app.WriteJSON`; in automl and autorag it is the package-level `writeJSON` with the same body:
 
 ```go
 func (app *App) WriteJSON(                         // Helper to send JSON responses
@@ -528,7 +497,7 @@ func (app *App) WriteJSON(                         // Helper to send JSON respon
 This is the equivalent of `res.status(200).json(data)` in Express. One function that handles serialization, headers, status code, and writing.
 
 ::: info WriteJSON Marshaling Varies
-Most BFFs use `json.MarshalIndent` (pretty-printed JSON with tabs). However, core-bff and mlflow use `json.Marshal` (compact JSON, no indentation). The function signature and behavior are otherwise identical.
+Most BFFs use `json.MarshalIndent` (pretty-printed JSON with tabs). However, [core-bff](/guide/core-bff/) and mlflow use `json.Marshal` (compact JSON, no indentation). The function signature and behavior are otherwise identical.
 :::
 
 ### The ReadJSON Helper

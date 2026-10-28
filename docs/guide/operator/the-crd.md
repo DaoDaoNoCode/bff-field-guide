@@ -6,7 +6,7 @@ A Custom Resource Definition (CRD) teaches the Kubernetes API server a new resou
 
 Here's the part that surprises frontend developers: **the CRD schema is written in Go, not YAML.** You define plain structs, annotate them with `// +kubebuilder:...` comment markers, and a code generator produces the OpenAPI schema the API server uses to validate every `Dashboard` anyone submits. It's like defining a Zod schema and having your class definition *be* the schema.
 
-Everything on this page lives in `dashboard-operator/api/v1alpha1/dashboard_types.go` (~255 lines).
+Everything on this page lives in `dashboard-operator/api/v1alpha1/dashboard_types.go` (~300 lines).
 
 ## Constants: naming is a contract
 
@@ -40,13 +40,11 @@ const (
     ModulePhaseDegraded    ModulePhase = "Degraded"
     ModulePhaseDisabled    ModulePhase = "Disabled"
 )
-
-type DeploymentMode string
-const (
-    DeploymentModeSidecar    DeploymentMode = "Sidecar"
-    DeploymentModeStandalone DeploymentMode = "Standalone"
-)
 ```
+
+::: info There Used to Be a Third Enum
+Older versions of this file had a `DeploymentMode` (`Sidecar` / `Standalone`). It was removed in PR #9392: every module BFF now runs as its own Deployment and Service, so there is nothing to choose. If you see `spec.deploymentMode` in old YAML, ignore it.
+:::
 
 ::: tip This Is the TypeScript String-Literal Union
 `type ModulePhase string` with a fixed set of consts is Go's version of `type ModulePhase = 'Deployed' | 'NotDeployed' | 'Degraded' | 'Disabled'`. The difference: TypeScript enforces the union at *compile time only*; here the `+kubebuilder:validation:Enum` marker (shown later) pushes the same constraint all the way down into the *API server*, so an invalid value is rejected before the operator ever runs. (Part 1's [Types & Variables](/guide/go-basics/types-and-variables) covers named-type enums.)
@@ -65,7 +63,7 @@ The spec is assembled from small, focused structs. A few worth calling out:
 ```go
 type GatewaySpec struct {
     // +kubebuilder:validation:MaxLength=253
-    // +kubebuilder:validation:Pattern=`^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`
+    // +kubebuilder:validation:Pattern=`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`
     Domain string `json:"domain"`
 }
 ```
@@ -90,11 +88,12 @@ Omit `port` and the API server writes `8080` for you at admission — a server-s
 ```go
 type ComponentAvailability struct {
     // +kubebuilder:validation:Enum=Managed;Unmanaged;Removed
+    // +kubebuilder:default=Removed
     ManagementState string `json:"managementState"`
 }
 ```
 
-Each entry in `spec.components` is keyed by a DSC component name (`"modelregistry"`, `"aipipelines"`, `"trustyai"`, ...) and carries its availability. The module resolver reads this map to decide which UI modules to deploy. *Where this map comes from* is the whole story of the [ODH Operator Connection](./odh-operator-connection) page — for now, just know it's the incoming signal.
+Each entry in `spec.components` is keyed by a DSC component name (`"modelregistry"`, `"aipipelines"`, `"trustyai"`, `"mlflowoperator"`, `"dataRegistry"`) and carries its availability. The module resolver reads this map to decide which UI modules to deploy. *Where this map comes from* is the whole story of the [ODH Operator Connection](./odh-operator-connection) page — for now, just know it's the incoming signal.
 
 ### The tri-state override
 
@@ -118,9 +117,21 @@ type DashboardSpec struct {
     Components     map[string]ComponentAvailability `json:"components,omitempty"`
     Modules        map[string]ModuleOverride        `json:"modules,omitempty"`
     Observability  *ObservabilitySpec               `json:"observability,omitempty"`
+    MaaSPortal     *MaaSPortalSpec                  `json:"maasPortal,omitempty"`
 
-    // +kubebuilder:default=Sidecar
-    DeploymentMode DeploymentMode `json:"deploymentMode,omitempty"`
+    // Deprecated: use MaaSPortal (pre-DSC-v3 spelling; MaaSPortal wins if both are set).
+    MaaSConsumerPortal *MaaSPortalSpec `json:"maasConsumerPortal,omitempty"`
+
+    // +kubebuilder:validation:MaxLength=63
+    NotebooksNamespace     string `json:"notebooksNamespace,omitempty"`
+    // +kubebuilder:validation:MaxLength=63
+    ModelRegistryNamespace string `json:"modelRegistryNamespace,omitempty"`
+}
+
+type MaaSPortalSpec struct {
+    // +kubebuilder:validation:Enum=Managed;Removed
+    // +kubebuilder:default=Removed
+    ManagementState string `json:"managementState,omitempty"`
 }
 ```
 
@@ -128,7 +139,11 @@ type DashboardSpec struct {
 The `common.ManagementSpec` field has no JSON name and the `,inline` tag — so its fields are *promoted* to the top level of `spec`. The CR gets `spec.managementState`, **not** `spec.managementSpec.managementState`. It's the Go struct-tag equivalent of `{...managementSpec}` in a React props object.
 :::
 
-`DeploymentMode` defaults to `Sidecar` (all module BFFs run as containers in one pod). The alternative, `Standalone` (each module gets its own Deployment), is a major branch in the reconciler — covered on the [Reconciler](./reconciler) page.
+The newer fields, briefly:
+
+- **`maasPortal.managementState`** — `Managed` deploys the MaaS Portal, a separate operand with its own Deployment and HTTPRoute (see [The Reconciler](./reconciler#the-maas-portal-operand)). `Managed` needs `gateway.domain`, because the portal's host is derived from it. Default `Removed`.
+- **`maasConsumerPortal`** — the same struct under its pre-DSC-v3 name, kept so old CRs still apply. Read it as an alias; `maasPortal` takes precedence.
+- **`notebooksNamespace` / `modelRegistryNamespace`** — when set, the operator creates a Role and RoleBinding in that namespace so the dashboard ServiceAccount can reach workbench or model-registry resources (`namespaced_rbac.go`). Empty means "skip that RBAC".
 
 ## The status: what actually happened
 
@@ -137,11 +152,19 @@ type DashboardStatus struct {
     common.Status                 `json:",inline"`  // Phase, Conditions, ObservedGeneration
     common.ComponentReleaseStatus `json:",inline"`  // version/release tracking
 
-    URL            string                  `json:"url,omitempty"`
+    URL                   string                  `json:"url,omitempty"`                   // last known good
+    MaaSPortalURL         string                  `json:"maasPortalUrl,omitempty"`         // cleared when the portal is removed
+    MaaSConsumerPortalURL string                  `json:"maasConsumerPortalUrl,omitempty"` // Deprecated mirror
     ModuleStatuses map[string]ModuleStatus `json:"moduleStatuses,omitempty"`
-    Distribution   *Distribution           `json:"distribution,omitempty"`
+    Distribution          *Distribution           `json:"distribution,omitempty"`          // {name, version}
 }
 ```
+
+The inlined `ComponentReleaseStatus` adds `status.releases`, and `distribution` reports which product build is running (`name`/`version`, read from the chart's ConfigMap). `maasConsumerPortalUrl` is kept in sync with `maasPortalUrl` for old readers.
+
+::: warning `url` Is "Last Known Good"
+The operator does not blank `status.url` on a transient Route or Gateway failure. A non-empty URL does not mean the dashboard is reachable right now — check the `Ready` condition first.
+:::
 
 The status is what `kubectl` shows the admin — the dashboard URL and per-module health:
 
@@ -152,7 +175,9 @@ status:
   moduleStatuses:
     modelRegistry:
       phase: Deployed
+      reason: Deployed
       message: Module container deployed
+      lastTransitionTime: "2026-10-20T09:12:44Z"
     mlflow:
       phase: Disabled
       reason: ComponentNotAvailable
@@ -165,9 +190,9 @@ Marker-based validation handles single fields. For rules that span fields — or
 
 ```go
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'default-dashboard'",
-//   message="Dashboard must be named 'default-dashboard'"
+//   message="Dashboard name must be default-dashboard"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.observability) || !self.spec.observability.enabled || has(self.spec.observability.persesService)",
-//   message="observability requires persesService when enabled"
+//   message="persesService must be specified when observability is enabled"
 type Dashboard struct {
     metav1.TypeMeta   `json:",inline"`
     metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -178,7 +203,7 @@ type Dashboard struct {
 
 Two rules, both enforced by the API server *before* the reconciler runs:
 
-1. **Singleton naming** — the CR must be named `default-dashboard`. Any other name is rejected. This is *how* the "one Dashboard per cluster" rule from the [overview](./index) is enforced; there's no code in the reconciler checking it.
+1. **Singleton naming** — the CR must be named `default-dashboard`. Any other name is rejected. This is *how* the "one Dashboard per cluster" rule from the [overview](./index) is enforced; the reconciler itself never checks it. (There is also an optional validating webhook, turned on with `--enable-webhook`, that rejects a second `Dashboard` through `platformwebhook.ValidateSingletonCreation` in `internal/webhook/dashboard_webhook.go`. The ODH Operator installs the operator with the webhook disabled, so CEL is what you can count on.)
 2. **Cross-field consistency** — if `observability.enabled` is true, `observability.persesService` must be present. A misconfiguration is caught at submit time, not at reconcile time.
 
 ::: info CEL Is a Zod Schema for Kubernetes
@@ -233,7 +258,7 @@ Make sure you can answer these:
 </div>
 
 ::: info What's Next
-Next: **[The Reconciler](./reconciler)** — the 14-step pipeline that turns this CRD's `spec` into a running dashboard, plus Sidecar vs Standalone modes and teardown.
+Next: **[The Reconciler](./reconciler)** — the pipeline that turns this CRD's `spec` into a running dashboard, plus the MaaS Portal operand and teardown.
 :::
 
 ::: info See Also

@@ -110,6 +110,17 @@ export default defineConfig({
           ],
         },
         {
+          text: 'Part 7: Core BFF',
+          collapsed: false,
+          items: [
+            { text: 'Meet Core BFF', link: '/guide/core-bff/' },
+            { text: 'Architecture', link: '/guide/core-bff/architecture' },
+            { text: 'Across Distributions', link: '/guide/core-bff/distributions' },
+            { text: 'Fastify Today', link: '/guide/core-bff/fastify-today' },
+            { text: 'Replacing Fastify', link: '/guide/core-bff/replacing-fastify' },
+          ],
+        },
+        {
           text: 'Part 6: Development Workflow',
           collapsed: false,
           items: [

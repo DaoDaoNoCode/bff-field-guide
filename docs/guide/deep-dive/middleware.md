@@ -222,8 +222,7 @@ func (app *App) EnableCORS(                        // Global middleware
         AllowCredentials: true,                    // Allow cookies/auth headers
         AllowedMethods:   []string{                // Allowed HTTP methods
             "GET", "PUT", "POST", "PATCH", "DELETE"},
-        AllowedHeaders:   []string{                // Allowed request headers (varies by BFF)
-            "kubeflow-userid", "kubeflow-groups"}, // Some BFFs (e.g., gen-ai) use an empty list instead
+        AllowedHeaders:   []string{},              // gen-ai: empty list (varies by BFF, see below)
     })
     return c.Handler(next)                         // Wrap the next handler with CORS
 }
@@ -231,58 +230,53 @@ func (app *App) EnableCORS(                        // Global middleware
 
 Same concept as the `cors` npm package. If `AllowedOrigins` is empty, CORS is disabled and the middleware is a no-op.
 
+`AllowedHeaders` is where BFFs differ: gen-ai passes an empty list; maas allows the `kubeflow-userid`/`kubeflow-groups` pair; automl allows `Content-Type`, its configured auth token header, and the kubeflow pair.
+
 **What it adds to context:** Nothing -- it only adds response headers.
 
 ### 4. InjectRequestIdentity -- Who Is This User?
 
-Extracts the user's identity from HTTP headers. This is the authentication layer:
+Extracts the user's identity from HTTP headers. This is the authentication layer. Here is gen-ai's:
 
 ```go
-// automl/maas pattern -- gen-ai BFF differs (only stores Token and MCPToken, no UserID/Groups)
-func (app *App) InjectRequestIdentity(             // Global middleware -- runs on every API request
+// packages/gen-ai/bff/internal/api/middleware.go
+func (app *App) InjectRequestIdentity(             // Global middleware -- runs on every request
     next http.Handler,                             // Wraps an http.Handler
 ) http.Handler {                                   // Returns an http.Handler
-    return http.HandlerFunc(func(                   // Wrap in http.HandlerFunc adapter
-        w http.ResponseWriter,                     // Response writer
-        r *http.Request,                           // Request
-    ) {
-        // Skip auth for non-API routes (static files, health check)
-        if !strings.HasPrefix(r.URL.Path, "/api/v1") { // Only auth API routes
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Skip auth for non-API routes (static files, health check).
+        // Both /api/v1 and /gen-ai/api/v1 count as API paths.
+        isAPIPath := strings.HasPrefix(r.URL.Path, app.config.APIPathPrefix) ||
+            strings.HasPrefix(r.URL.Path, constants.PathPrefix+app.config.APIPathPrefix)
+        if !isAPIPath {
             next.ServeHTTP(w, r)                   // Pass through without auth
-            return                                 // Done
+            return
         }
 
-        var identity *kubernetes.RequestIdentity   // Will hold the user's identity
-
         if app.config.AuthMethod == config.AuthMethodDisabled { // Dev mode
-            identity = &kubernetes.RequestIdentity{ // Use a hardcoded mock identity
-                UserID: "user@example.com",        // Fake user
-                Groups: []string{"system:masters"},// Full admin access
-            }
-        } else {                                   // Production mode
-            var err error                          // Declare err variable
-            identity, err = app.kubernetesClientFactory.ExtractRequestIdentity(
-                r.Header,                          // Extract from request headers
-            )
-            if err != nil {                        // If extraction failed
-                app.badRequestResponse(w, r, err)  // Send 400 error
-                return                             // Stop! No identity = no access
-            }
+            next.ServeHTTP(w, r)                   // No identity at all in gen-ai
+            return
+        }
+
+        identity, err := app.kubernetesClientFactory.ExtractRequestIdentity(r.Header)
+        if err != nil {                            // Missing or malformed token header
+            app.unauthorizedResponse(w, r, err)    // 401
+            return                                 // Stop! No identity = no access
         }
 
         ctx := context.WithValue(                  // Store identity in context
-            r.Context(),                           // Start from existing context
-            constants.RequestIdentityKey,           // The key constant
-            identity,                              // The identity struct
+            r.Context(),
+            constants.RequestIdentityKey,          // The key constant
+            identity,                              // *integrations.RequestIdentity
         )
         next.ServeHTTP(w, r.WithContext(ctx))      // Continue with identity in context
     })
 }
 ```
 
-This is the authentication gate. In production, it reads the user's identity from HTTP headers (either `kubeflow-userid`/`kubeflow-groups` headers or an `Authorization: Bearer` token). In dev mode with auth disabled, the automl/maas BFFs create a fake admin user; the gen-ai BFF simply passes the request through with no identity extraction. See [Authentication & RBAC](./auth) for the full story.
+This is the authentication gate. In ODH/RHOAI every BFF reads the user's token from `x-forwarded-access-token` (deployed with `--auth-method=user_token`). With auth disabled, gen-ai simply passes the request through; automl/autorag use a fake extractor that returns `fake-user@example.com`; maas has no disabled mode. automl and autorag don't write this method at all -- they use the generic `kubernetes.InjectRequestIdentity` from `packages/autox-core/services` and wrap only the API routes with it. See [Authentication & RBAC](./auth) for the full story.
 
-**What it adds to context:** `RequestIdentityKey` (*kubernetes.RequestIdentity). The struct fields vary by BFF: automl/maas stores UserID, Groups, and Token; gen-ai stores only Token and MCPToken.
+**What it adds to context:** `RequestIdentityKey`. The type varies by BFF: gen-ai stores `*integrations.RequestIdentity` (`Token`, `MCPToken`); autox-core and maas store a `RequestIdentity` with `UserID`, `Groups`, and `Token`.
 
 ### 5. AttachNamespace -- Extract and Validate Namespace (Route-Level)
 
@@ -304,8 +298,8 @@ func (app *App) AttachNamespace(                   // Route-level middleware
             return                                 // Stop the chain
         }
 
-        // Some BFFs (automl, autorag) also validate against DNS-1123 label rules here.
-        // Others (gen-ai) only check for empty. Check your specific BFF.
+        // automl/autorag also call kubernetes.ValidateNamespaceName here (DNS-1123).
+        // gen-ai only checks for empty. Check your specific BFF.
 
         ctx := context.WithValue(                  // Store namespace in context
             r.Context(),                           // Start from existing context
@@ -323,103 +317,110 @@ func (app *App) AttachNamespace(                   // Route-level middleware
 
 **What it adds to context:** `NamespaceQueryParameterKey` (string -- the validated namespace). The exact constant name varies by BFF -- always check `internal/constants/` in the BFF you are working on.
 
-### 6. RequireAccess -- Can This User Do This? (Route-Level)
+### 6. RequireAccessToService -- Can This User Do This? (Route-Level)
 
-Performs an access review (SAR or SSAR, depending on the auth method) to check if the user has permission:
+Performs a SelfSubjectAccessReview with the user's token to check if the user has permission. gen-ai's version:
 
 ```go
-func (app *App) RequireAccessToService(            // Route-level middleware (name varies by BFF)
+// packages/gen-ai/bff/internal/api/middleware.go (trimmed)
+func (app *App) RequireAccessToService(            // Route-level middleware
     next func(http.ResponseWriter, *http.Request, httprouter.Params),
 ) httprouter.Handle {                              // Returns httprouter handler
-    return func(                                   // The wrapper function
-        w http.ResponseWriter,
-        r *http.Request,
-        ps httprouter.Params,
-    ) {
+    return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
         if app.config.AuthMethod == config.AuthMethodDisabled { // Skip in dev mode
-            next(w, r, ps)                         // Pass through
-            return                                 // Done
+            next(w, r, ps)
+            return
         }
 
-        ctx := r.Context()                         // Get context (has namespace and identity)
-        namespace, _ := ctx.Value(                 // Read namespace (set by AttachNamespace)
-            constants.NamespaceQueryParameterKey,
-        ).(string)
-        identity, _ := ctx.Value(                  // Read identity (set by InjectRequestIdentity)
-            constants.RequestIdentityKey,
-        ).(*kubernetes.RequestIdentity)
-
-        client, err := app.kubernetesClientFactory.GetClient(ctx) // Get K8s client
-        if err != nil {                            // Check for client failure
-            app.serverErrorResponse(w, r,          // Send 500
-                fmt.Errorf("failed to get K8s client: %w", err))
-            return                                 // Stop
+        ctx := r.Context()                         // Has namespace and identity
+        identity, ok := ctx.Value(constants.RequestIdentityKey).(*integrations.RequestIdentity)
+        if !ok || identity == nil {
+            app.badRequestResponse(w, r, fmt.Errorf("missing RequestIdentity in context"))
+            return
+        }
+        if err := app.kubernetesClientFactory.ValidateRequestIdentity(identity); err != nil {
+            app.badRequestResponse(w, r, err)
+            return
         }
 
-        allowed, err := client.CanListDSPipelineApplications( // Ask K8s: "Can this user do this?"
-            ctx, identity, namespace,              // Pass user and namespace
-        )
-        if err != nil {                            // Check for SAR failure
-            app.serverErrorResponse(w, r,          // Send 500
-                fmt.Errorf("failed to check permissions: %w", err))
-            return                                 // Stop
+        if namespace, ok := ctx.Value(constants.NamespaceQueryParameterKey).(string); ok && namespace != "" {
+            k8sClient, err := app.kubernetesClientFactory.GetClient(ctx)
+            if err != nil {
+                app.serverErrorResponse(w, r, fmt.Errorf("failed to get Kubernetes client: %w", err))
+                return
+            }
+
+            // SSAR: can this token list OGXServer resources in the namespace?
+            allowed, err := k8sClient.CanListOGXServers(ctx, identity, namespace)
+            if err != nil {
+                app.handleK8sClientError(w, r, err)
+                return
+            }
+            if !allowed {                          // User is NOT authorized
+                app.forbiddenResponse(w, r,        // Send 403 Forbidden
+                    "user does not have permission to access services in this namespace")
+                return                             // Handler never runs
+            }
         }
 
-        if !allowed {                              // User is NOT authorized
-            app.forbiddenResponse(w, r,            // Send 403 Forbidden
-                "user does not have permission in this namespace")
-            return                                 // Stop the chain -- handler never runs
-        }
-
-        next(w, r, ps)                             // User IS authorized -- continue to handler
+        next(w, r, ps)                             // User IS authorized -- continue
     }
 }
 ```
 
-**What just happened?** This is the security enforcer. It asks the Kubernetes API: "Can user X perform action Y in namespace Z?" If the answer is no, the handler never runs. This is what makes the BFF the real security boundary -- even if someone bypasses the frontend UI, the BFF blocks unauthorized requests.
+**What just happened?** This is the security enforcer. It asks the Kubernetes API: "Can the owner of this token perform action Y in namespace Z?" If the answer is no, the handler never runs. This is what makes the BFF the real security boundary -- even if someone bypasses the frontend UI, the BFF blocks unauthorized requests.
+
+automl/autorag have the same middleware on their `Middleware` struct (`app.mw.RequireAccessToService`), calling the shared `k8sService.CanAccessResource(ctx, ns, "list", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "")` from autox-core.
 
 **What it adds to context:** Nothing -- it's a gate. Either you pass (and `next` is called) or you don't (and you get a 403).
 
 ### 7. AttachClient -- Create the Service Client (Route-Level)
 
-Creates a service client and puts it in context for the handler. This one uses `AttachOGXClient` as an example (the naming varies -- some BFFs call it `AttachPipelineServerClient`, etc.):
+Creates a service client and puts it in context for the handler. gen-ai's `AttachOGXClient` (`internal/api/middleware.go`) is the example -- other BFFs have `AttachMLflowClient`, `AttachBFFMaaSClient`, and so on:
 
 ```go
-func (app *App) AttachOGXClient(                   // Route-level middleware (name varies by BFF)
+// packages/gen-ai/bff/internal/api/middleware.go (trimmed)
+func (app *App) AttachOGXClient(                   // Route-level middleware
     next func(http.ResponseWriter, *http.Request, httprouter.Params),
-) httprouter.Handle {                              // Returns httprouter handler
-    return func(                                   // The wrapper function
-        w http.ResponseWriter,
-        r *http.Request,
-        ps httprouter.Params,
-    ) {
-        ctx := r.Context()                         // Get context
-        namespace, _ := ctx.Value(                 // Read namespace from context
-            constants.NamespaceQueryParameterKey,
-        ).(string)
-
-        if app.config.MockPipelineServerClient {   // Mock mode
-            mockClient := app.pipelineServerFactory.CreateClient( // Create mock client
-                "mock://"+namespace, "", false, nil)
-            ctx = context.WithValue(ctx,           // Store mock client in context
-                constants.PipelineServerClientKey, mockClient)
-        } else {                                   // Real mode
-            // ... K8s discovery logic to find the service URL ...
-            realClient := app.pipelineServerFactory.CreateClient( // Create real client
-                baseURL, authToken, false, app.rootCAs)
-            ctx = context.WithValue(ctx,           // Store real client in context
-                constants.PipelineServerClientKey, realClient)
+) httprouter.Handle {
+    return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+        ctx := r.Context()
+        namespace, ok := ctx.Value(constants.NamespaceQueryParameterKey).(string)
+        if !ok || namespace == "" {
+            app.badRequestResponse(w, r, fmt.Errorf("missing namespace in context - ensure AttachNamespace middleware is used first"))
+            return
         }
 
-        r = r.WithContext(ctx)                     // Create new request with updated context
-        next(w, r, ps)                             // Continue to handler
+        var llamaStackClient llamastack.LlamaStackClientInterface
+
+        if app.config.MockLSClient {               // Mock mode: the mock factory ignores the URL
+            llamaStackClient = app.llamaStackClientFactory.CreateClient(
+                "", "", app.config.InsecureSkipVerify, app.rootCAs, "/v1")
+        } else {
+            serviceURL := app.config.LlamaStackURL // Developer override, if set
+            if serviceURL == "" {
+                // ... list OGXServers in the namespace (as the user) and
+                //     take Items[0].Status.ServiceURL; 500 if none ...
+            }
+            identity, _ := ctx.Value(constants.RequestIdentityKey).(*integrations.RequestIdentity)
+            llamaStackClient = app.llamaStackClientFactory.CreateClient( // Real client,
+                serviceURL, identity.Token,        // carrying the user's token
+                app.config.InsecureSkipVerify, app.rootCAs, "/v1")
+        }
+
+        ctx = context.WithValue(ctx, constants.LlamaStackClientKey, llamaStackClient)
+        next(w, r.WithContext(ctx), ps)            // Continue to handler
     }
 }
 ```
 
 Notice that the handler does not create its own client -- middleware does. The handler just reads the client from context. This is dependency injection at the request level: each request gets its own client with the right credentials and service URL.
 
-**What it adds to context:** `PipelineServerClientKey` (the service client interface -- real or mock).
+**What it adds to context:** `LlamaStackClientKey` (the `LlamaStackClientInterface` -- real or mock).
+
+::: info automl/autorag don't attach clients per request
+After the move to `packages/autox-core/services`, automl and autorag build their pipelines, S3 and K8s services once in `NewApp` and inject them into handler structs (`PipelinesHandler`, `S3Handler`...). Their route chains stop at `app.mw.AttachNamespace(app.mw.RequireAccessToService(handler))`; the pipeline server is discovered inside the service on each call.
+:::
 
 ## How the Chain Looks When Assembled
 
@@ -437,17 +438,17 @@ AttachNamespace → RequireAccess → AttachClient → Handler
       5th             6th            7th          8th
 ```
 
-**Complete execution order for `GET /api/v1/pipeline-runs?namespace=my-project`:**
+**Complete execution order for a gen-ai LlamaStack route, e.g. `GET /api/v1/lsd/models?namespace=my-project`:**
 
 ```
 1. RecoverPanic     → wraps everything in panic recovery
 2. EnableTelemetry  → generates trace ID, creates trace logger
 3. EnableCORS       → adds CORS headers
-4. InjectIdentity   → extracts user from kubeflow-userid header
+4. InjectIdentity   → reads the token from x-forwarded-access-token
 5. AttachNamespace  → validates "my-project" query param
-6. RequireAccess    → SubjectAccessReview: can user list in "my-project"?
-7. AttachClient     → discovers pipeline server, creates HTTP client
-8. Handler          → fetches and returns pipeline runs
+6. RequireAccess    → SelfSubjectAccessReview: can this token list OGXServers in "my-project"?
+7. AttachClient     → finds the OGXServer URL, creates the LlamaStack client
+8. Handler          → calls LlamaStack and returns the result
 ```
 
 If step 5 fails (no namespace), steps 6-8 never execute. If step 6 fails (access denied), steps 7-8 never execute. Each middleware is a gate -- pass or stop.

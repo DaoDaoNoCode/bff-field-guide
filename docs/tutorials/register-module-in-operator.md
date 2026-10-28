@@ -5,12 +5,12 @@ In the last tutorial you scaffolded a federated module and ran it on your laptop
 1. **Standalone deployment manifests** -- the Kubernetes YAML (Deployment, Service, RBAC, NetworkPolicy) that runs your module's image in a pod.
 2. **An operator registry entry** -- so the dashboard-operator knows your module exists, deploys it, wires its proxy path into the federation ConfigMap, and resolves its image.
 
-Both belong to the **`/konflux-onboarding`** skill, not `/module-onboarding`. This tutorial walks through exactly what that skill does, so the generated YAML and the single Go edit are not a black box.
+The `/module-onboarding` skill now covers both: Phase 6 writes the deployment manifests and Phase 7 registers the module in the operator. The build pipeline and image publishing stay with `/konflux-onboarding`. This tutorial walks through what those phases do, so the generated YAML and the Go edit are not a black box.
 
 **Time:** ~35 minutes
 
 ::: warning Read This First -- The Corrected Model
-Older `module-onboarding` notes described editing `module_deploy.go` and `support.go` by hand to add proxy paths and image-map entries. **That is stale.** The `moduleRegistry` map in `dashboard-operator/internal/controller/modules.go` is the *single source of truth* -- proxy paths, the image env var, DSC gates, and inter-module deps all live in one struct, and `module_deploy.go` / `support.go` read from it. You add **one** entry to `modules.go`. You do **not** touch those other files. See the struct doc comment at `dashboard-operator/internal/controller/modules.go:13`.
+The `module-onboarding` skill's Phase 7 still tells you to edit a `moduleProxyPaths` map in `module_deploy.go` and `imagesMap` in `support.go` by hand. **That text is stale** -- `moduleProxyPaths` no longer exists. The `moduleRegistry` map in `dashboard-operator/internal/controller/modules.go` is the *single source of truth*: proxy paths (`ProxyPaths`, or the `/<slug>/api` default via `proxyPathsFor`), the image env var (`support.go` fills `imagesMap` from the registry in `init()`), DSC gates, inter-module deps and inter-BFF deps all live in one struct. You add **one** entry to `modules.go`. You do **not** touch `module_deploy.go` or `support.go`. See the struct doc comment at `dashboard-operator/internal/controller/modules.go:13`.
 :::
 
 ::: info The React Analogy
@@ -50,7 +50,7 @@ manifests/modules/my-module/
 └── service.yaml                # The Service the operator's federation config points at
 ```
 
-Now find-and-replace the old module's identifiers with yours. Every file references `eval-hub` / `eval-hub-ui` / port `8543` -- replace with `my-module` / `my-module-ui` / your allocated service port (say `8943`):
+Now find-and-replace the old module's identifiers with yours. Every file references `eval-hub` / `eval-hub-ui` / port `8543` -- replace with `my-module` / `my-module-ui` / your allocated service port. The registry uses 8043…8843 and 9043…9243, with 8443 (kube-rbac-proxy) and 8943 (core-bff) reserved, so the next free one is **`9343`**:
 
 ```bash
 cd manifests/modules/my-module
@@ -67,7 +67,8 @@ Check the files carefully:
 - **`deployment.yaml`** -- container name (`my-module-ui`), `containerPort`, liveness/readiness probe paths, and the env vars the BFF reads.
 - **`service.yaml`** -- `name: odh-dashboard-my-module-ui`, port + `targetPort`.
 - **`kustomization.yaml`** -- `images:` block pointing at `params.env`'s image ref, and the `resources:` list naming all the other files.
-- **`params.env`** -- the `odh-dashboard-my-module-ui-image` key the Konflux pipeline patches with the real digest.
+- **`params.env`** -- the `my-module-ui-image` key (`<slug>-ui-image`, the same key `support.go` derives) with the default image ref. The operator overwrites it from `RELATED_IMAGE_*` when that env var is set.
+- **`networkpolicy.yaml`** -- ingress on your port from the main dashboard pod (`deployment in (odh-dashboard, rhods-dashboard)`) and the ingress policy group. If another BFF will call yours, add that caller here too, or its requests time out.
 
 Then register the directory in the parent kustomization:
 
@@ -78,19 +79,20 @@ Then register the directory in the parent kustomization:
 
 ## Step 2: Add the Registry Entry (One Struct, One File)
 
-This is the single Go edit. Open `dashboard-operator/internal/controller/modules.go` and add an entry to the `moduleRegistry` map. Model it on the `automl` entry (`modules.go:83`):
+This is the single Go edit. Open `dashboard-operator/internal/controller/modules.go` and add an entry to the `moduleRegistry` map. Model it on the `automl` entry (around `modules.go:88`):
 
 ```go
 "myModule": {                        // camelCase key = the Module Federation name
     Name:          "myModule",       // must match the key
     ContainerName: "my-module-ui",   // must match deployment.yaml's container name
-    Port:          8943,             // must match service.yaml / package.json service port
+    Port:          9343,             // must match service.yaml / package.json service port
     ImageEnvVar:   "RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE",  // the RELATED_IMAGE_* contract
     ManifestSlug:  "my-module",      // must match manifests/modules/<slug>/
     TLS:           true,             // true if the module serves HTTPS in-cluster
     RequiredDSCComponents: []string{"aipipelines"},  // DSC gate -- omit if always-on
     // InterModuleDependencies: []string{"genAi"},   // optional -- gate on another module running
     // ProxyPaths:  []proxyRoute{{Path: "/_bff/my-module/api", PathRewrite: "/api"}}, // optional custom path
+    // RequiredByMaaSPortal: true,  // only if the MaaS Portal needs this module
 },
 ```
 
@@ -99,14 +101,16 @@ What each field controls -- this is *why* one struct replaces the old scattered 
 | Field | Drives | If omitted |
 |-------|--------|-----------|
 | `Name` / key | The federation ConfigMap module name | -- (required) |
-| `ContainerName` | Container-readiness overlay + stale-container cleanup | -- (required) |
+| `ContainerName` | Stale-container cleanup (readiness comes from the module Deployment, via `overlayStandaloneReadiness`) | -- (required) |
 | `Port` | The Service port the federation proxy targets | -- (required) |
 | `ImageEnvVar` | Image resolution -- read from the operator's env at reconcile | pod has no image |
 | `ManifestSlug` | Which `manifests/modules/<slug>/` to apply | -- (required) |
 | `ProxyPaths` | The Fastify/federation proxy route | defaults to `/<slug>/api → /api` |
 | `RequiredDSCComponents` | DSC gate -- module only deploys if these DSC components are on | always deploys |
 | `InterModuleDependencies` | Deploy gate -- waits for another module to be running | no dependency |
-| `InterBFFDeps` | Injects `BFF_<TARGET>_SERVICE_*` env vars (Tutorial 6) | no inter-BFF wiring |
+| `InterBFFDeps` | Writes `BFF_<TARGET>_SERVICE_*` keys into your `<slug>-params` ConfigMap; consume them with `envFrom` (Tutorial 6) | no inter-BFF wiring |
+| `RequiredByMaaSPortal` | Keeps the module deployed while a Managed MaaS Portal needs it, even if the core dashboard is `Removed` | not kept for the portal |
+| `TLS` | Federation entry uses `https` to your Service | plain HTTP |
 
 ::: tip Default Proxy Path Is Usually What You Want
 The doc comment at `modules.go:17` spells it out: `ProxyPaths` nil means the default `/<ManifestSlug>/api → /api`. Only set `ProxyPaths` if your module needs a non-standard route (like `mlflow`'s `/_bff/mlflow/api`). Most modules leave it out.
@@ -114,11 +118,13 @@ The doc comment at `modules.go:17` spells it out: `ProxyPaths` nil means the def
 
 ## Step 3: Bump the Registry Count Test
 
-The operator has a guard test asserting the exact registry size, so a stray or missing entry fails CI loudly. Open `dashboard-operator/internal/controller/modules_test.go` and update the count (`modules_test.go:409`):
+The operator has a guard test asserting the exact registry size, so a stray or missing entry fails CI loudly. Open `dashboard-operator/internal/controller/modules_test.go` and update the count (`modules_test.go:508`):
 
 ```go
-assert.Len(t, moduleRegistry, 10, "expected 10 modules in registry")  // was 9
+assert.Len(t, moduleRegistry, 12, "expected 12 modules in registry")  // was 11
 ```
+
+While you're in that file, add `"myModule"` in alphabetical order to the expected list in `TestModuleNames`, and bump the `wantLen` values in `TestResolveModuleStatuses` by one.
 
 **What you should see** after adding your entry and bumping the number:
 
@@ -134,14 +140,14 @@ PASS
 ok      github.com/opendatahub-io/odh-dashboard/dashboard-operator/internal/controller
 ```
 
-If it fails with *"expected 9 ... got 10"*, you forgot to bump the count. If it fails the other way, your entry did not register -- check for a duplicate key.
+If it fails with *"expected 11 ... got 12"*, you forgot to bump the count. If it fails the other way, your entry did not register -- check for a duplicate key.
 
 ## Step 4: Wire the RELATED_IMAGE Contract
 
 `ImageEnvVar` (`RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE`) is a **contract** with the external `opendatahub-operator`. At runtime, that operator injects the env var into the dashboard-operator's pod, and the reconciler reads it to know which image digest to deploy. Two ends must agree:
 
-1. **In this repo** -- add the module's image to the Helm chart's related-images list (`charts/dashboard/values.yaml`) so the standalone Helm deploy also resolves it.
-2. **In `opendatahub-operator`** -- a separate PR adds `RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE` to that operator's CSV/manifests. Until that merges, the RHOAI-managed deployment cannot resolve your image (standalone Helm still works via `values.yaml`).
+1. **In this repo** -- add `RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE: ""` to `relatedImages:` in `dashboard-operator/charts/dashboard/values.yaml`, alphabetically. The empty value is deliberate: the chart only injects non-empty values, so by default the digest in `params.env` wins. Then run `make chart-validate` in `dashboard-operator/` to lint and render the chart.
+2. **In `opendatahub-operator`** -- a separate PR adds `RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE` to `relatedImages()` in `internal/controller/modules/dashboard/support.go`, plus an image entry in `manifests-config.yaml`. Until that merges, the ODH Operator never injects the env var into the dashboard-operator's Deployment, and your module silently runs the default image from `params.env`.
 
 ::: warning Two Repos, Two PRs
 The registry entry (this repo) references an env var that a *different* repo must define. Open the `opendatahub-operator` PR early -- it is the long pole. Note it in your module's onboarding checklist so review does not stall waiting on it. See `.claude/skills/konflux-onboarding/references/devops-integration.md`.
@@ -153,11 +159,12 @@ Compile the operator and run the module-facing tests:
 
 ```bash
 cd dashboard-operator
-go build ./...                              # operator compiles with your entry
-go test ./internal/controller/ -short      # unit + envtest-tagged tests
+go build ./...              # operator compiles with your entry
+make test                   # unit tests (fake client, pure functions)
+make test-integration       # envtest suites, behind //go:build integration
 ```
 
-**What you should see:** a clean build and passing tests. The envtest suite (`deployment_integration_test.go`, `federation_integration_test.go`) exercises the reconcile pipeline against an in-process API server -- if your entry is malformed (bad port, missing slug), these catch it before a real cluster does.
+**What you should see:** a clean build and passing tests. Plain `go test` and `make test` do **not** run the envtest suites (`deployment_integration_test.go`, `federation_integration_test.go`): they carry the `integration` build tag, and only `make test-integration` sets it and downloads the API server binaries. Those suites exercise the reconcile pipeline against an in-process API server -- if your entry is malformed (bad port, missing slug), they catch it before a real cluster does.
 
 ## How the Operator Deploys It From Here
 
@@ -169,7 +176,8 @@ Dashboard CR reconcile
       ├─▶ resolve module image from RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE
       ├─▶ check RequiredDSCComponents + InterModuleDependencies gates
       ├─▶ apply manifests/modules/my-module/ (Deployment, Service, RBAC, NetworkPolicy)
-      ├─▶ add module + proxy path to the federation ConfigMap
+      ├─▶ check its Deployment is Available (overlayStandaloneReadiness)
+      ├─▶ add module + proxy path to the federation-config ConfigMap
       └─▶ SHA-256 hash the ConfigMap → rolling-restart the dashboard if it changed
 ```
 
@@ -186,17 +194,18 @@ Before moving on, verify:
 - [ ] `manifests/modules/my-module/` has all 8 files with your name/port/container substituted
 - [ ] `manifests/modules/kustomization.yaml` lists `my-module` in `resources:`
 - [ ] One entry added to `moduleRegistry` in `modules.go` -- and **no** edits to `module_deploy.go` / `support.go`
-- [ ] The count in `modules_test.go` bumped, and `TestModuleRegistry` passes
-- [ ] `charts/dashboard/values.yaml` has the module's related-image entry
-- [ ] The `opendatahub-operator` `RELATED_IMAGE_*` PR is opened (or tracked)
-- [ ] `cd dashboard-operator && go build ./...` and `go test ./internal/controller/ -short` pass
+- [ ] Port `9343` (or the next free one) used in `modules.go`, `deployment.yaml`, `service.yaml`, `networkpolicy.yaml` and `package.json`
+- [ ] The count in `modules_test.go` bumped (11 → 12), `TestModuleNames` updated, and `TestModuleRegistry` passes
+- [ ] `charts/dashboard/values.yaml` has the module's related-image entry, and `make chart-validate` passes
+- [ ] The `opendatahub-operator` PR (`relatedImages()` + `manifests-config.yaml`) is opened (or tracked)
+- [ ] `cd dashboard-operator && go build ./... && make test && make test-integration` pass
 
 </div>
 
 ::: info If You Get Stuck
 - [Modules & Federation](../guide/operator/modules-and-federation) -- registry, dependency resolution, federation ConfigMap
-- [The Reconciler](../guide/operator/reconciler) -- the 14-step pipeline your module now flows through
-- `.claude/skills/konflux-onboarding/SKILL.md` -- the authoritative end-to-end onboarding workflow
+- [The Reconciler](../guide/operator/reconciler) -- the reconcile pipeline your module now flows through
+- `.claude/skills/module-onboarding/SKILL.md` (Phases 6-7) and `.claude/skills/konflux-onboarding/SKILL.md` (pipeline and images) -- the onboarding workflows; trust `modules.go` over the skill where they disagree
 - `dashboard-operator/internal/controller/modules.go:13` -- the `ModuleDefinition` struct doc
 :::
 
