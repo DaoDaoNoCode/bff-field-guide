@@ -93,7 +93,7 @@ The SSE handler doesn't bypass the middleware chain. Auth, namespace validation,
 
 The gen-ai BFF needs API keys from the maas BFF, so it calls the maas BFF's token endpoint directly -- BFF-to-BFF HTTP over the `bffclient` package, forwarding the user's own token so the target enforces RBAC as that user. It's the same factory-and-interface pattern you saw for upstream [integrations](./integrations), just pointed at another BFF instead of an external service.
 
-This is a big enough topic -- service discovery, `BFF_<TARGET>_*` env vars, `user_token` vs `internal` auth (and its security implications), `MOCK_BFF_CLIENTS`, structured error codes, and the special case of calling core-bff -- that it has its own chapter.
+This is a big enough topic -- service discovery, `BFF_<TARGET>_*` env vars, `user_token` vs `internal` auth (and its security implications), `MOCK_BFF_CLIENTS`, structured error codes, and why core-bff is not (yet) a target -- that it has its own chapter.
 
 ➡️ **[Inter-BFF Communication](./inter-bff-communication)** -- the full deep dive.
 

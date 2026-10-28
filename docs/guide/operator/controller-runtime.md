@@ -40,7 +40,7 @@ A Scheme answers one question: *when my code says `&v1alpha1.Dashboard{}`, what 
 
 Every type the operator touches must be registered before the Manager starts. The dashboard-operator does this in an `init()` function so it runs before `main()`.
 
-From `dashboard-operator/cmd/manager/main.go:28`:
+From `dashboard-operator/cmd/manager/main.go` (around L33):
 
 ```go
 var scheme = runtime.NewScheme()
@@ -51,12 +51,17 @@ func init() {
     utilruntime.Must(clientgoscheme.AddToScheme(scheme))    // Pod, Deployment, Service, ConfigMap...
     utilruntime.Must(v1alpha1.AddToScheme(scheme))          // our Dashboard CRD types
     utilruntime.Must(routev1.AddToScheme(scheme))           // OpenShift Route (for the dashboard URL)
+    utilruntime.Must(gatewayv1.Install(scheme))             // Gateway API HTTPRoute
     utilruntime.Must(apiextensionsv1.AddToScheme(scheme))   // CRD types (to check if PersesDashboard CRD exists)
 }
 ```
 
 ::: tip What `utilruntime.Must` Does
 `Must` panics if its argument returns an error. That sounds scary, but it's the right call at startup: if a type fails to register, the operator is fundamentally broken, so crash *immediately* rather than run with a half-configured Scheme. This is the Go equivalent of throwing during module load instead of failing mysteriously at request time.
+:::
+
+::: info The Log Format
+`main.go` builds the logger from `zap.Options{Development: true}` and binds zap's flags, so the default output is human-readable development logs. Turn up verbosity with `--zap-log-level=debug`.
 :::
 
 ### Where `AddToScheme` comes from
@@ -87,15 +92,24 @@ The Manager is the process. You build **one** per binary, register your controll
 
 ### Flags and namespace resolution
 
-The operator reads CLI flags — where its manifests live, metrics/health addresses, leader election, which namespace to manage:
+The operator reads CLI flags — where its manifests live, metrics/health addresses, leader election, which namespace it runs in, and the optional webhook:
 
 ```go
-flag.StringVar(&manifestsBasePath, "manifests-base-path", "/opt/manifests",
-    "Path to the kustomize base directory")
-flag.BoolVar(&enableLeaderElection, "leader-elect", false,
-    "Enable leader election for controller manager")
+flag.StringVar(&manifestsBasePath, "manifests-base-path", "/opt/manifests/dashboard", "Base path for dashboard manifests")
+flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "Address the metrics endpoint binds to")
+flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "Address the health probe endpoint binds to")
+flag.BoolVar(&leaderElect, "leader-elect", false, "Enable leader election for controller manager")
+flag.BoolVar(&secureMetrics, "secure-metrics", true, "Serve metrics over HTTPS")
+flag.StringVar(&operatorNamespace, "namespace", "", "Namespace where the operator is deployed")
+flag.BoolVar(&enableWebhook, "enable-webhook", false, "Enable the validating webhook server")
+flag.IntVar(&webhookPort, "webhook-port", 9443, "Port the webhook server binds to")
+
+opts := zap.Options{Development: true}
+opts.BindFlags(flag.CommandLine) // adds --zap-log-level and friends
 flag.Parse()
 ```
+
+`--namespace` is **required**: if it is empty the operator falls back to the `OPERATOR_NAMESPACE` env var and exits if that is empty too. `APPLICATIONS_NAMESPACE` (where the dashboard itself runs) falls back to the operator namespace.
 
 ::: tip Remember `--manifests-base-path` and `--leader-elect`
 You'll set both by hand when you run the operator locally in dev mode — pointing `--manifests-base-path` at the repo's `manifests/` and `--leader-elect=false`. The [Build & Deploy the Operator](/tutorials/build-and-deploy-operator) tutorial uses exactly these flags.
@@ -103,15 +117,23 @@ You'll set both by hand when you run the operator locally in dev mode — pointi
 
 ### Creating the Manager
 
-From `main.go:78` (condensed):
+From `main.go` (condensed):
 
 ```go
-mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-    Scheme:                 scheme,             // the Scheme we populated in init()
-    Metrics:                metricsserver.Options{ BindAddress: metricsAddr },
-    HealthProbeBindAddress: probeAddr,
-    LeaderElection:         enableLeaderElection,
-    LeaderElectionID:       "dashboard-operator.opendatahub.io",
+restCfg := ctrl.GetConfigOrDie()
+
+tlsResult, err := pkgtls.Resolve(context.Background(), restCfg) // cluster TLS profile, see below
+
+mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+    Scheme:                 scheme,                                          // populated in init()
+    NewCache:               controller.NewManagerCache(applicationsNamespace), // scoped cache, see below
+    Metrics:                metricsserver.Options{BindAddress: metricsAddr, SecureServing: true, TLSOpts: tlsResult.TLSOpts},
+    HealthProbeBindAddress: healthProbeAddr,
+    LeaderElection:         leaderElect,
+    LeaderElectionID:       "dashboard.components.platform.opendatahub.io",
+    Client: client.Options{Cache: &client.CacheOptions{DisableFor: []client.Object{
+        &corev1.ConfigMap{}, &corev1.Secret{}, // always read live, never cached
+    }}},
 })
 ```
 
@@ -122,21 +144,71 @@ mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 - the **metrics** and **health** servers,
 - **leader election** (so only one replica reconciles at a time in HA setups).
 
+### The cache is scoped, on purpose
+
+By default a controller-runtime cache watches *every* object of each type it is asked for, cluster-wide. On a big cluster that means holding every Deployment and every ConfigMap in memory. The dashboard-operator narrows it down in `internal/controller/controller_cache.go`:
+
+```go
+func ManagerCacheOptions(applicationsNamespace string, mapper meta.RESTMapper) (cache.Options, error) {
+    // label platform.opendatahub.io/part-of in (dashboard, maas-portal)
+    ownedSelector := ...
+    appsNamespaceOnly := map[string]cache.Config{applicationsNamespace: {}}
+
+    byObject := map[client.Object]cache.ByObject{}
+    for _, obj := range []client.Object{&appsv1.Deployment{}, &corev1.Service{},
+        &corev1.ServiceAccount{}, &policyv1.PodDisruptionBudget{}} {
+        byObject[obj] = cache.ByObject{Namespaces: appsNamespaceOnly, Label: ownedSelector}
+    }
+    for _, obj := range []client.Object{&networkingv1.NetworkPolicy{}, &rbacv1.Role{},
+        &rbacv1.RoleBinding{}, &rbacv1.ClusterRole{}, &rbacv1.ClusterRoleBinding{}} {
+        byObject[obj] = cache.ByObject{Label: ownedSelector}
+    }
+    // + HTTPRoute and ConsoleLink, only if their APIs exist on this cluster
+    return cache.Options{ByObject: byObject, ReaderFailOnMissingInformer: true}, nil
+}
+```
+
+Four rules follow from this, and they bite new contributors:
+
+- **Only labelled objects are visible.** A cached `r.Get` on a Deployment without the `part-of` label returns NotFound, even if it exists.
+- **`ReaderFailOnMissingInformer: true`** means a cached read of a type that is not in `ByObject` fails at runtime instead of silently starting a new cluster-wide informer. If you add a new owned type, add it to **both** `ManagerCacheOptions` and `Owns()`.
+- **ConfigMaps and Secrets bypass the cache** (`DisableFor`): every read goes to the API server. ConfigMap *events* come from small dedicated caches instead: one selected by the owned label in the applications namespace, and one per named input ConfigMap (`dashboard-operator-config`, `odh-dashboard-config`) selected by `metadata.name` (`controller_configmaps.go`). The `OdhDashboardConfig` watch also gets its own single-object cache (`addOdhDashboardConfigWatch`).
+- **Use `APIReader` for anything outside the cache.** The reconciler carries `APIReader: mgr.GetAPIReader()`, an uncached reader, for direct reads such as the input ConfigMaps, the Route lookup and the federation ConfigMap.
+
 ### Platform detection, then start
 
 Once — at startup, not per reconcile — the operator detects whether it's on OpenShift or plain Kubernetes, then registers the reconciler and starts:
 
 ```go
-platform, _ := cluster.DetectPlatform(ctx, mgr.GetClient(), os.Getenv("ODH_PLATFORM_TYPE"), namespace)
+// APIReader: the cache isn't running yet. A detection error is fatal.
+platform, err := cluster.DetectPlatform(context.Background(), mgr.GetAPIReader(),
+    os.Getenv("ODH_PLATFORM_TYPE"), operatorNamespace)
 
 controller.SetupWithManager(mgr, controller.Options{ /* paths, platform, namespaces */ })
+if enableWebhook {
+    mgr.GetWebhookServer().Register("/validate-dashboard", webhook.NewSingletonHandler(mgr.GetAPIReader()))
+}
 
 mgr.AddHealthzCheck("healthz", healthz.Ping)
 mgr.AddReadyzCheck("readyz", healthz.Ping)
 
-// BLOCKS until SIGTERM/SIGINT, then shuts down gracefully.
-mgr.Start(ctrl.SetupSignalHandler())
+ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+if tlsResult.APIAvailable {
+    watcher := &pkgtls.ProfileWatcher{Client: mgr.GetClient(), InitialProfile: tlsResult.Profile,
+        OnProfileChange: func(context.Context) { cancel() }} // TLS profile changed: stop, restart, reload
+    watcher.SetupWithManager(mgr)
+}
+
+setupLog.Info("Starting manager")
+// BLOCKS until SIGTERM/SIGINT (or cancel()), then shuts down gracefully.
+mgr.Start(ctx)
 ```
+
+### TLS: following the cluster's profile
+
+OpenShift lets an admin pick a cluster-wide TLS security profile (Old, Intermediate, Modern or Custom) on `apiservers.config.openshift.io/cluster`. `internal/tls/resolve.go` reads it once at startup and turns it into `TLSOpts` for the metrics server and the webhook. Off OpenShift, or if the API server object isn't there, it falls back to hardened Intermediate defaults; an unexpected error is fatal (fail-closed).
+
+Go's `tls.Config` can't be swapped under a running server, so `ProfileWatcher` takes the blunt route: when the profile changes it cancels the manager's context, the process exits, and Kubernetes restarts the pod with the new settings. The BFFs follow the same profile through the shared `pkg/tls` package (`tlsprofile.ServerTLSConfig`).
 
 ::: info `mgr.Start()` Blocks — On Purpose
 This is the opposite of a BFF's `server.listen()` in one way and identical in another. Identical: it's the line that "runs forever." Different: instead of accepting HTTP connections, it's running the cache, the controllers, leader election, and the metrics/health servers all at once, and it only returns when the process receives a shutdown signal.
@@ -146,11 +218,12 @@ This is the opposite of a BFF's `server.listen()` in one way and identical in an
 
 The Reconciler is the part you write. It's a struct that **embeds** `client.Client` (so you can call `r.Get`, `r.List`, etc. directly on it) plus the config injected at setup.
 
-From `dashboard-operator/internal/controller/dashboard_reconciler.go:72`:
+From `dashboard-operator/internal/controller/dashboard_controller.go` (around L138):
 
 ```go
 type DashboardReconciler struct {
     client.Client                       // embedded — r.Get / r.List / r.Create work directly
+    APIReader             client.Reader // uncached reads (ConfigMaps, Route, federation ConfigMap)
     Scheme                *runtime.Scheme
     ManifestsBasePath     string
     Platform              cluster.Platform
@@ -188,7 +261,13 @@ return ctrl.Result{RequeueAfter: 10 * time.Second}, nil // Poll: call me again i
 return ctrl.Result{Requeue: true}, nil                 // Requeue ASAP (rare).
 ```
 
-The dashboard-operator uses `RequeueAfter` in exactly two situations: the OpenShift Route isn't ready yet (retry in 10s), and when a `reconcileInterval` is configured for periodic re-sync.
+The dashboard-operator uses `RequeueAfter` in several places:
+
+- the dashboard Route hasn't been admitted yet (retry in 10s);
+- a `reconcileInterval` is set in `dashboard-operator-config` (periodic re-sync, minimum 5s);
+- observability auto-detection found nothing (look again in 5 minutes);
+- the MaaS Portal operand isn't ready (retry in 1 minute);
+- deletion is waiting for MaaS Portal cleanup to finish.
 
 ::: warning Never Block Inside `Reconcile`
 This is the cardinal rule of operators. Do **not** `time.Sleep`, do **not** poll a channel in a loop, do **not** wait for an external system inline. If you need to wait, `return ctrl.Result{RequeueAfter: d}, nil` and let the framework call you again. Blocking here stalls the work queue for *every* resource, not just this one. It's the operator equivalent of a synchronous `fs.readFileSync` in a hot request path — except worse, because there's one shared loop.
@@ -196,17 +275,29 @@ This is the cardinal rule of operators. Do **not** `time.Sleep`, do **not** poll
 
 ### Wiring the watches: `For()` and `Owns()`
 
-`SetupWithManager` (bottom of `dashboard_reconciler.go:942`) is where you declare which cluster events trigger reconciliation:
+`SetupWithManager` (in `internal/controller/controller_setup.go`) is where you declare which cluster events trigger reconciliation:
 
 ```go
-return ctrl.NewControllerManagedBy(mgr).
+controllerBuilder := ctrl.NewControllerManagedBy(mgr).
     For(&v1alpha1.Dashboard{}).                 // primary: watch Dashboard CRs
-    Owns(&appsv1.Deployment{}).                 // also: Deployments we created
-    Owns(&corev1.Service{}).                    // Services we created
-    Owns(&corev1.ConfigMap{}).                  // ConfigMaps we created
-    Owns(&policyv1.PodDisruptionBudget{}).      // PDBs we created
-    Complete(r)
+    Owns(&appsv1.Deployment{}).                 // Deployments we created
+    Owns(&corev1.Service{}, builder.WithPredicates(serviceChangedPredicate())).
+    Owns(&corev1.ServiceAccount{}).
+    Owns(&networkingv1.NetworkPolicy{}).
+    Owns(&rbacv1.ClusterRole{}).
+    Owns(&rbacv1.ClusterRoleBinding{}).
+    Owns(&rbacv1.Role{}).
+    Owns(&rbacv1.RoleBinding{}).
+    Owns(&policyv1.PodDisruptionBudget{}, builder.WithPredicates(podDisruptionBudgetChangedPredicate())).
+    Watches(&corev1.Namespace{}, /* MaaS operator namespace → Dashboard */ ...)
+
+addConfigMapWatches(mgr, controllerBuilder, r)                     // dedicated ConfigMap caches
+addOptionalOwnedResourceWatches(mgr.GetRESTMapper(), controllerBuilder) // HTTPRoute, ConsoleLink if present
+dashboardController, err := controllerBuilder.Build(r)
+return addOdhDashboardConfigWatch(mgr, dashboardController, r)
 ```
+
+Note what is *not* there: ConfigMaps are not `Owns()`-ed. Their events come through the dedicated, selector-scoped caches described above. The Service and PDB predicates ignore status-only updates so the operator doesn't reconcile on every endpoint change.
 
 - **`For(&Dashboard{})`** — the primary trigger. Create/update/delete a `Dashboard` CR and the reconciler fires.
 - **`Owns(&Deployment{})`** — watch Deployments carrying an `ownerReference` back to a Dashboard CR. Someone runs `kubectl delete deployment odh-dashboard`? The framework maps that event to the owning Dashboard CR and re-reconciles, **recreating it**. This is self-healing.
@@ -224,8 +315,8 @@ return ctrl.NewControllerManagedBy(mgr).
    enqueue Reconcile(default-dashboard) → Deployment recreated
 ```
 
-::: info Why Not `Owns()` Everything?
-Cluster-scoped resources like `ClusterRole` and `ClusterRoleBinding` can't carry a namespace-scoped owner reference (an owner reference can't point "up" from cluster scope to a namespaced object, and the GC rules differ). The operator manages those through **label-based discovery** during teardown instead — you'll see that on the [Reconciler](./reconciler) page.
+::: info Owner References Aren't the Whole Teardown Story
+Because the `Dashboard` CR is cluster-scoped, it *can* own cluster-scoped objects like `ClusterRole` and `ClusterRoleBinding`, which is why they appear in `Owns()`. But garbage collection only runs when the owner is deleted. `managementState: Removed` keeps the CR, so GC never fires, and some extras (the RBAC in `openshift-ingress`) live outside the normal flow. So the operator also tears down by **label-based discovery** — you'll see that on the [Reconciler](./reconciler) page.
 :::
 
 ## The Whole Startup Flow
@@ -235,19 +326,20 @@ Putting the four pillars together, here's what happens from process start to fir
 ```
 main.go
   1. init()            → register types in the Scheme
-  2. flag.Parse()      → read CLI flags
-  3. ctrl.NewManager   → build the Manager (client, cache, metrics, health)
-  4. DetectPlatform    → OpenShift vs plain Kubernetes (once)
-  5. SetupWithManager  → build the Controller; For(Dashboard) + Owns(...)
-  6. mgr.Start()       → BLOCKS forever
+  2. flag.Parse()      → read CLI flags, resolve namespaces
+  3. pkgtls.Resolve    → read the cluster TLS profile
+  4. ctrl.NewManager   → build the Manager (scoped cache, client, metrics, health)
+  5. DetectPlatform    → OpenShift vs plain Kubernetes (once)
+  6. SetupWithManager  → build the Controller; For(Dashboard) + Owns(...) + ConfigMap caches
+  7. mgr.Start()       → BLOCKS until a signal or a TLS profile change
 
 A Dashboard CR appears (or an owned resource changes):
-  7. Controller sees the watch event → enqueues a request
-  8. Calls DashboardReconciler.Reconcile(ctx, req)
-  9. Reconcile reads state, applies desired state, returns ctrl.Result
+  8. Controller sees the watch event → enqueues a request
+  9. Calls DashboardReconciler.Reconcile(ctx, req)
+ 10. Reconcile reads state, applies desired state, returns ctrl.Result
 ```
 
-Steps 1–6 are this page. Step 9 — everything the reconciler actually *does* — is the next three pages.
+Steps 1–7 are this page. Step 10 — everything the reconciler actually *does* — is the next three pages.
 
 ---
 
@@ -261,6 +353,7 @@ Make sure you can answer these:
 - [ ] What are the three most common `ctrl.Result` return values and what does each mean?
 - [ ] What's the difference between `For()` and `Owns()`, and why does `Owns()` give you self-healing?
 - [ ] Why must you never block inside `Reconcile`?
+- [ ] What happens if you add a new owned type to `Owns()` but forget `ManagerCacheOptions`?
 
 </div>
 

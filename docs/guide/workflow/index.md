@@ -22,7 +22,13 @@ odh-dashboard/
 │   └── core-bff/
 │       └── bff/
 │           └── go.mod  # .../distributions/core-bff/bff
+├── pkg/
+│   └── tls/
+│       └── go.mod      # .../pkg/tls (shared TLS-profile helper)
 ├── packages/
+│   ├── autox-core/
+│   │   └── services/
+│   │       └── go.mod  # .../packages/autox-core/services (shared by automl, autorag)
 │   ├── gen-ai/
 │   │   └── bff/
 │   │       └── go.mod  # .../packages/gen-ai/bff
@@ -31,11 +37,13 @@ odh-dashboard/
 │           └── go.mod  # .../packages/maas/bff
 ```
 
+The [Core BFF](/guide/core-bff/) is the one Go module that ships inside the main dashboard pod rather than as a module of its own.
+
 Three consequences follow directly from this, and each one bites newcomers:
 
 ::: warning The Three Gotchas of a Multi-Module Repo
 1. **`go test ./...` from the repo root does nothing.** There's no `go.mod` there, so Go has no module to walk. You must `cd` into a module first (or use a `make` target that does).
-2. **Dependencies are not shared.** Each module pins its own versions in its own `go.sum`. Bumping a library in the operator does *not* bump it in the BFFs.
+2. **Dependencies are mostly not shared.** Each module pins its own versions in its own `go.sum`. Bumping a library in the operator does *not* bump it in the BFFs. The exceptions are the two in-repo library modules: `pkg/tls` (the cluster TLS-profile helper nearly every BFF imports) and `packages/autox-core/services` (Kubernetes, Pipelines and S3 services for automl and autorag). Consumers pull them in with a `replace` directive pointing at the local path, so a change there lands in several BFFs at once -- run those BFFs' tests too.
 3. **Your editor only sees one module by default.** gopls (the Go language server) indexes the first `go.mod` it finds and ignores the rest -- so cross-module "go to definition" silently fails until you fix it (see [go.work](#tie-it-together-for-your-editor-with-go-work) below).
 :::
 
@@ -47,11 +55,15 @@ Because each module is independent, they don't have to agree on a Go toolchain v
 
 | Module | Location | Go version | controller-runtime |
 |---|---|---|---|
-| Dashboard Operator | `dashboard-operator/` | 1.26 | v0.23.3 |
-| Core BFF | `distributions/core-bff/bff/` | 1.25 | v0.22.3 |
-| Gen AI BFF | `packages/gen-ai/bff/` | 1.26 | -- |
-| MaaS BFF | `packages/maas/bff/` | 1.26 | -- |
-| Other BFFs | `packages/*/bff/` | varies | -- |
+| Dashboard Operator | `dashboard-operator/` | 1.26.5 | v0.24.1 |
+| [Core BFF](/guide/core-bff/) | `distributions/core-bff/bff/` | 1.25.0 | v0.22.3 |
+| Gen AI BFF | `packages/gen-ai/bff/` | 1.26.0 | v0.22.4 |
+| MaaS BFF | `packages/maas/bff/` | 1.26 | v0.22.3 |
+| Model Registry BFF | `packages/model-registry/upstream/bff/` | 1.26.0 | v0.25.1 |
+| TLS helper | `pkg/tls/` | 1.25.0 | n/a |
+| Other BFFs | `packages/*/bff/` | varies | varies |
+
+BFFs use controller-runtime too -- for its client and for envtest in mock mode and tests. Versions as of late October 2026; check each `go.mod` for the current values.
 
 ::: tip One Install Covers Everything
 You don't need multiple Go installations. The `GOTOOLCHAIN` directive in each `go.mod` handles version negotiation automatically -- install the *highest* version any module requires (1.26) and Go transparently uses the right toolchain for a module that asks for 1.25. It's the closest thing Go has to `nvm`, except you don't manage it manually.
@@ -74,10 +86,10 @@ The third gotcha above -- gopls only seeing one module -- is the one that actual
 If you've used TypeScript project references (a root `tsconfig.json` with a `references` array pointing at sub-projects so the language server resolves symbols across them), `go.work` is the exact same idea. It doesn't change how anything *builds* -- each module still builds independently -- it only teaches your editor's language server to index all of them at once.
 :::
 
-Create `go.work` at the repo root. **Do not commit it** -- it's gitignored, because everyone's set of modules-in-flight differs:
+Create `go.work` at the repo root. **Do not commit it** -- everyone's set of modules-in-flight differs. It is *not* in `.gitignore` today, so check `git status` before you commit (or add it to your global gitignore):
 
 ```go
-// go.work (gitignored)
+// go.work (local only -- don't commit)
 go 1.26
 
 use (
@@ -85,6 +97,7 @@ use (
     ./distributions/core-bff/bff
     ./packages/gen-ai/bff
     ./packages/maas/bff
+    ./pkg/tls                     // optional: shared modules you're editing
 )
 ```
 
@@ -100,7 +113,7 @@ After creating or editing `go.work`, run **Go: Restart Language Server** from th
 - **[Debugging](./debugging)** -- `log/slog`, Delve, mock modes, envtest binary setup, and a "Common Mistakes" list distilled from real onboarding pain.
 
 ::: tip Key Takeaway
-The Go side of this repo is **many independent modules, not one workspace**. There's no root `go.mod`, so you run Go commands from inside a module (or via `make`); dependencies and Go versions are per-module; and you install the single highest Go version (1.26) since `GOTOOLCHAIN` negotiates the rest. The one setup step that pays off immediately is a gitignored `go.work` at the root so your editor indexes every module at once.
+The Go side of this repo is **many independent modules, not one workspace**. There's no root `go.mod`, so you run Go commands from inside a module (or via `make`); dependencies and Go versions are per-module; and you install the single highest Go version (1.26) since `GOTOOLCHAIN` negotiates the rest. The one setup step that pays off immediately is a local, uncommitted `go.work` at the root so your editor indexes every module at once. Two modules -- `pkg/tls` and `packages/autox-core/services` -- are libraries shared via `replace`, so changes there ripple into several BFFs.
 :::
 
 ::: info See Also
@@ -118,9 +131,9 @@ The Go side of this repo is **many independent modules, not one workspace**. The
 
 Make sure you can answer these:
 - [ ] Why does `go test ./...` from the repo root do nothing?
-- [ ] Are dependencies and Go versions shared across modules, or per-module?
+- [ ] Are dependencies and Go versions shared across modules, or per-module -- and which two modules are the exceptions?
 - [ ] Why is it enough to install only Go 1.26 even though core-bff asks for 1.25?
-- [ ] What does `go.work` do, what TypeScript feature is it analogous to, and why is it gitignored?
+- [ ] What does `go.work` do, what TypeScript feature is it analogous to, and why shouldn't you commit it?
 - [ ] What must you do in VS Code after editing `go.work`?
 
 </div>

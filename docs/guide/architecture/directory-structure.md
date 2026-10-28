@@ -7,7 +7,7 @@
 Imagine you have just cloned the odh-dashboard repo and opened the gen-ai BFF in your editor. You see a list of directories and files. Some look familiar, some do not. Let us go through every single one, starting from the top level, and build up your understanding one directory at a time.
 
 ::: info Composite Directory Tree
-This tree is a composite showing the most common directories across all BFFs. No single BFF has exactly this layout -- gen-ai has additional directories like `cache/`, `services/`, `types/`, while automl has a top-level `mocks/` directory. Always check your specific BFF.
+This tree is a composite showing the most common directories across all BFFs. No single BFF has exactly this layout -- gen-ai has additional directories like `cache/`, `services/`, `types/`, automl keeps its mocks in `internal/fake/`, and core-bff (the dashboard's platform BFF) has its own layout -- see [Part 7: Core BFF](/guide/core-bff/architecture). Always check your specific BFF.
 :::
 
 Here is the complete tree:
@@ -38,6 +38,8 @@ bff/                                     # root of the BFF -- everything lives h
 │   │   │   ├── client.go                #       K8s client interface + implementation
 │   │   │   ├── factory.go               #       client factory for per-request clients
 │   │   │   ├── token_k8s_client.go      #       token-based K8s client
+│   │   │   ├── sandbox_*.go, wrapper_app*.go #   gen-ai-specific CR helpers
+│   │   │   ├── pgvector/                #       pgvector helpers
 │   │   │   └── k8smocks/               #       mock K8s client (co-located with real code)
 │   │   │
 │   │   ├── llamastack/                  #     LlamaStack client
@@ -59,8 +61,10 @@ bff/                                     # root of the BFF -- everything lives h
 │   │   └── types.go                     #     shared integration types
 │   │
 │   ├── models/                          #   data types -- like your TypeScript interfaces
-│   │   ├── models.go                    #     request/response DTOs
-│   │   └── kubernetes.go                #     K8s resource type definitions
+│   │   ├── lsd_models.go                #     one file per domain: request/response DTOs
+│   │   ├── maas_models.go               #
+│   │   ├── aaa_mcp.go                   #
+│   │   └── ...                          #
 │   │
 │   ├── repositories/                    #   business logic -- like your data hooks
 │   │   └── llamastack_distribution.go   #     domain logic, data transformation
@@ -76,16 +80,22 @@ bff/                                     # root of the BFF -- everything lives h
 │   └── src/
 │       └── gen-ai.yaml                  #     OpenAPI 3.0 specification
 │
+├── static/                              #   the built federated frontend bundle (served under /_mf/)
+├── testdata/                            #   fixtures for tests
 ├── go.mod                               #   module definition -- your package.json
-├── go.sum                               #   dependency checksums -- your package-lock.json
-└── Makefile                             #   build commands -- your npm scripts
+├── go.sum                               #   dependency checksums -- your pnpm-lock.yaml
+├── Makefile                             #   build commands -- your package.json scripts
+├── Dockerfile                           #   container image for the module
+├── build.openshift.sh                   #   build helper for OpenShift builds
+├── .golangci.yml                        #   linter config -- your .eslintrc
+└── README.md
 ```
 
 That is a lot of directories. Let us go through each one in detail, starting from the top.
 
 ## `cmd/` -- The Entry Point
 
-**What goes here:** The `main` function that starts the server. Flag parsing, environment variable loading, dependency wiring, and the `http.ListenAndServe` call.
+**What goes here:** The `main` function that starts the server. Flag parsing, environment variable loading, dependency wiring, TLS setup, and the `http.Server` that listens until shutdown.
 
 **Frontend equivalent:** Think of this as your `src/index.ts` or `src/bootstrap.tsx` -- the file that initializes everything and starts the app.
 
@@ -124,12 +134,36 @@ func main() {                              // the entry point -- Go runs this fu
         log.Fatalf("failed to create app: %v", err) // log the error and exit
     }
 
-    addr := fmt.Sprintf(":%d", cfg.Port)  // format the listen address (e.g., ":8080")
-    http.ListenAndServe(addr, app.Routes()) // start the HTTP server -- blocks until shutdown
+    srv := &http.Server{                   // an explicit server, so we can set timeouts and TLS
+        Addr:    fmt.Sprintf(":%d", cfg.Port), // listen address (e.g., ":8143" in the cluster)
+        Handler: app.Routes(),             // the full handler tree
+    }
+    if certFile != "" && keyFile != "" {   // --cert-file / --key-file: TLS in the cluster
+        tlsCfg, err := tlsprofile.ServerTLSConfig(context.Background(), logger) // shared pkg/tls
+        if err != nil { os.Exit(1) }
+        srv.TLSConfig = tlsCfg             // ciphers and min version from the cluster TLS profile
+    }
+
+    go func() {                            // serve in a goroutine...
+        if certFile != "" && keyFile != "" {
+            srv.ListenAndServeTLS(certFile, keyFile)
+        } else {
+            srv.ListenAndServe()
+        }
+    }()
+
+    shutdownCh := make(chan os.Signal, 1)  // ...and wait for SIGINT/SIGTERM
+    signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
+    <-shutdownCh
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    srv.Shutdown(ctx)                      // graceful shutdown: finish in-flight requests
 }
 ```
 
-That is the entire startup sequence. Parse flags, create the app, start the server. Everything else is in `internal/`. If you have used Express, this is like:
+This is a trimmed version of `packages/gen-ai/bff/cmd/main.go`; the real file has many more flags, telemetry setup, and error handling. The [Entry Point deep dive](/guide/deep-dive/entry-point) walks through it line by line.
+
+The startup sequence boils down to: parse flags, create the app, start the server (with TLS when certificates are mounted), and shut down gracefully. Everything else is in `internal/`. If you have used Express, this is like:
 
 ```typescript
 // The Express equivalent of main.go
@@ -215,23 +249,31 @@ type App struct {                                    // the App struct holds all
     // ... more client factories ...                 // one factory per external service
 }
 
-func (app *App) Routes() http.Handler {              // returns the complete HTTP handler
-    router := httprouter.New()                       // create a new router (like Express Router)
+func (app *App) Routes() http.Handler {              // returns the complete HTTP handler (trimmed)
+    apiRouter := httprouter.New()                    // the API router (like Express Router)
 
-    router.GET("/healthcheck", app.HealthcheckHandler) // health check -- no auth needed
-
-    router.GET("/api/v1/lsd/models",                 // register the models list endpoint
+    apiRouter.GET(constants.ModelsListPath,          // "/api/v1/lsd/models"
         app.AttachNamespace(                          // middleware: extract namespace
             app.RequireAccessToService(               // middleware: check RBAC
                 app.AttachOGXClient(                  // middleware: create LlamaStack client
                     app.LlamaStackModelsHandler))))   // handler: list models
+    // ... ~100 more routes, plus appMux, which adds the static file handler ...
 
-    // Global middleware wraps the entire router
-    return app.RecoverPanic(                          // catch panics so server doesn't crash
-        app.EnableTelemetry(                          // add request logging and metrics
-            app.EnableCORS(                           // add CORS headers
-                app.InjectRequestIdentity(            // extract user identity from headers
-                    router))))                        // the router with all routes registered
+    // Health check: its own mux and a shorter chain -- no identity needed
+    healthcheckMux := http.NewServeMux()
+    healthcheckMux.Handle(constants.HealthCheckPath,
+        app.RecoverPanic(app.EnableTelemetry(healthcheckRouter)))
+
+    combinedMux := http.NewServeMux()
+    combinedMux.Handle(constants.HealthCheckPath, healthcheckMux)
+    combinedMux.Handle("/", otelhttp.NewHandler(      // everything else
+        app.RecoverPanic(                             // catch panics so server doesn't crash
+            app.EnableTelemetry(                      // add request logging and metrics
+                app.EnableCORS(                       // add CORS headers
+                    app.InjectRequestIdentity(        // extract user identity (API paths only)
+                        appMux)))),                   // API router + static files
+        "gen-ai-bff"))
+    return combinedMux
 }
 ```
 
@@ -340,9 +382,8 @@ This directory is where the BFF earns its name. Each subdirectory talks to a dif
 | `llamastack/` | LlamaStack | Model listing, inference, tool use, vector stores |
 | `mcp/` | MCP Servers | Tool server connections and tool execution |
 | `mlflow/` | MLflow | Experiment tracking, prompt management |
-| `maas/` | MaaS BFF | Inter-BFF calls for model subscriptions and API keys |
 | `nemo/` | NeMo Guardrails | Guardrail configuration and enforcement |
-| `bffclient/` | Other BFFs | Generic inter-BFF HTTP client |
+| `bffclient/` | Other BFFs | Generic inter-BFF HTTP client -- this is how gen-ai talks to the MaaS and MLflow BFFs (`BFFTargetMaaS`, `BFFTargetMLflow`) |
 | `externalmodels/` | External Models | External model provider integration |
 
 ### The Kubernetes Client
@@ -378,11 +419,11 @@ integrations/
 Mocks live right next to the code they mock. This is a deliberate choice in the gen-ai BFF. When you start the BFF with `--mock-k8s-client`, the `NewApp` function in `app.go` swaps the real `KubernetesClientFactory` for `k8smocks.NewMockedKubernetesClientFactory()`. Same interface, different implementation.
 
 ::: warning Mock Location Varies by BFF
-Not all BFFs organize mocks the same way. The gen-ai BFF co-locates mocks within each integration subdirectory (e.g., `kubernetes/k8smocks/`). Other BFFs like automl and maas have a top-level `internal/mocks/` directory instead. Always check the specific BFF you are working in to find where mocks live.
+Not all BFFs organize mocks the same way. The gen-ai BFF co-locates mocks within each integration subdirectory (e.g., `kubernetes/k8smocks/`). maas, eval-hub and agent-ops have a top-level `internal/mocks/` directory; automl and autorag use `internal/fake/`; core-bff has `internal/mocks/` plus `kubernetes/k8mocks/` (note the spelling). Always check the specific BFF you are working in to find where mocks live.
 :::
 
 ::: tip Mocks Enable Local Development
-Running `make dev-bff` or passing `--mock-k8s-client --mock-ls-client` starts the BFF with all external calls mocked out. You can develop and test BFF endpoints without a Kubernetes cluster, without LlamaStack running, without any real services. The mocks return realistic data that matches the OpenAPI spec.
+Running `make dev-bff-mock` from `packages/gen-ai/` (plain `make dev-bff` needs a real `LLAMA_STACK_URL`), or passing `--mock-k8s-client --mock-ls-client`, starts the BFF with all external calls mocked out. You can develop and test BFF endpoints without a Kubernetes cluster, without LlamaStack running, without any real services. The mocks return realistic data that matches the OpenAPI spec.
 :::
 
 ## `internal/models/` -- Data Transfer Objects
@@ -506,14 +547,20 @@ This spec is used by the contract testing framework (`@odh-dashboard/contract-te
 ```
 module github.com/opendatahub-io/gen-ai          # module path -- like "name" in package.json
 
-go 1.26                                           # minimum Go version -- like "engines" in package.json
+go 1.26.0                                         # minimum Go version -- like "engines" in package.json
 
 require (                                          # dependencies -- like "dependencies" in package.json
     github.com/julienschmidt/httprouter v1.3.0    # HTTP router (like Express)
-    k8s.io/client-go v0.30.0                      # official Kubernetes client library
-    k8s.io/api v0.30.0                            # Kubernetes API types
+    k8s.io/client-go v0.34.3                      # official Kubernetes client library
+    k8s.io/api v0.34.3                            # Kubernetes API types
+    ...
 )
+
+# use the shared TLS module from this repo -- like a "workspace:*" dependency
+replace github.com/opendatahub-io/odh-dashboard/pkg/tls => ../../../pkg/tls
 ```
+
+The `replace` line is worth knowing. Every BFF in the repo (core-bff included; the vendored notebooks backend is the exception) imports `pkg/tls` from the repo root, a small shared Go module whose `tlsprofile.ServerTLSConfig` reads the cluster's TLS profile so all BFFs serve the same ciphers and minimum version. `replace` points Go at the local directory instead of downloading a published version. automl and autorag also share code through `packages/autox-core/services`.
 
 **`go.sum`** is Go's `package-lock.json`. It contains checksums for every dependency to ensure reproducible builds. You never edit this file manually -- `go mod tidy` manages it.
 
@@ -521,25 +568,30 @@ require (                                          # dependencies -- like "depen
 
 **Frontend equivalent:** Like the `scripts` section of your `package.json`, but using Make syntax.
 
+There are two Makefiles. `packages/<name>/bff/Makefile` builds and runs the Go server; `packages/<name>/Makefile` (one level up) has the developer workflows that start the BFF together with the frontend.
+
+| `bff/Makefile` target | What it does |
+|---|---|
+| `run` | `go run ./cmd` with the flags built from Make variables (`PORT`, `MOCK_K8S_CLIENT`, `AUTH_METHOD`, ...) |
+| `debug` | Same, under the Delve debugger |
+| `test` | `go test ./...` (with envtest for a fake API server) |
+| `lint` / `lint-fix` | `golangci-lint run` -- Go's equivalent of ESLint |
+| `build` | Compiles the binary |
+| `envtest` | Downloads the envtest binaries |
+| `mlflow-up`, `llamastack-up` | gen-ai only: local MLflow / Llama Stack servers for development |
+
+| `packages/<name>/Makefile` target | What it does |
+|---|---|
+| `dev-bff` / `dev-bff-mock` | Run the BFF against a cluster, or fully mocked |
+| `dev-bff-federated` | Run the BFF the way federated dev expects (`PORT`, `user_token`, `x-forwarded-access-token`) |
+| `dev-start-federated` | BFF + module frontend dev server together, for use inside the main dashboard |
+
+For example, gen-ai's mock target boils down to:
+
 ```makefile
-run:                                      # start the BFF server
-	go run ./cmd --port 8080              # compile and run in one step
-
-dev-bff:                                  # start with all mocks (no cluster needed)
-	go run ./cmd \                        # compile and run
-	    --mock-k8s-client \               # use mock Kubernetes client
-	    --mock-ls-client \                # use mock LlamaStack client
-	    --mock-mcp-client \               # use mock MCP client
-	    --port 8080                       # listen on port 8080
-
-test:                                     # run all tests
-	go test ./...                         # ./... means "all packages recursively"
-
-lint:                                     # run the linter
-	golangci-lint run                     # Go's equivalent of ESLint
-
-build:                                    # compile to a binary
-	go build -o bin/bff ./cmd             # output to bin/bff
+dev-bff-mock:   # from packages/gen-ai/
+	cd bff && make run LOG_LEVEL=debug MOCK_LS_CLIENT=true MOCK_K8S_CLIENT=true \
+	    MOCK_MCP_CLIENT=true MOCK_BFF_CLIENTS=true AUTH_METHOD=disabled ...
 ```
 
 <div class="checkpoint">
@@ -579,7 +631,7 @@ The biggest difference: in Go, test files live **next to** the code they test, n
 
 ## Which Directories Vary Between BFFs?
 
-Most of the structure is consistent across all eight BFFs, but there are differences:
+Most of the structure is consistent across the eleven package BFFs, but there are differences:
 
 | Directory | Always Present | What Varies |
 |---|---|---|
@@ -598,13 +650,24 @@ Most of the structure is consistent across all eight BFFs, but there are differe
 | `internal/testutil/` | Sometimes | Shared test utilities |
 | `openapi/` | Yes | One spec per BFF |
 
+::: info core-bff is laid out differently
+The dashboard's platform BFF, `distributions/core-bff/bff/`, follows the same broad shape but differs in ways that will trip you up:
+
+- extra directories: `repositories/` (one per domain, wired in `repositories.go`), `proxy/` (K8s HTTP and WebSocket proxies), `ssrf/` (outbound URL guard), `k8sutil/`;
+- routes split across `routes_*.go` files instead of one big `app.go`;
+- `secureRoute` / `secureAdminRoute` (and `requirePlatform`) instead of `RequireAccessToService`;
+- mocks in `internal/mocks/` and `kubernetes/k8mocks/`.
+
+See [Core BFF Architecture](/guide/core-bff/architecture).
+:::
+
 ::: warning The model-registry Exception (Git Subtree)
 The model-registry BFF lives at `packages/model-registry/upstream/bff/` instead of `packages/model-registry/bff/`. This is because model-registry is a **git subtree** synced from the kubeflow/model-registry upstream repository.
 
 What this means for you:
 - **Do not edit files inside `upstream/` directly** -- your changes will be overwritten on the next sync
 - To contribute changes, submit them to the upstream kubeflow/model-registry repo first
-- The sync is managed via `package-subtree` CLI commands (see the package's README for the workflow)
+- The sync is managed with `pnpm run update-subtree` (or `update-subtree-local`) from `packages/model-registry/`; the source is `kubeflow/model-registry`, directory `clients/ui` (the `subtree` block in the package's `package.json`)
 - The internal BFF structure (cmd/, internal/api/, etc.) is the same as other BFFs
 
 If you are assigned a model-registry ticket, ask your team lead whether the change belongs upstream or downstream before starting.
@@ -646,7 +709,7 @@ Here is the mental model: when a request arrives at the BFF, the code it touches
 ```
 cmd/main.go                     # started the server (happened at boot time)
   |
-internal/api/middleware.go       # global middleware runs (identity, CORS, telemetry)
+internal/api/middleware.go       # global middleware runs (telemetry, CORS, identity on /api paths)
   |
 internal/api/app.go              # router dispatches to the matching route
   |

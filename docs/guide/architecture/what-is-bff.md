@@ -29,7 +29,7 @@ Here is a concrete example. To list OGXServer resources (which represent LlamaSt
 GET https://kubernetes-api.cluster.local/apis/ogx.io/v1/namespaces/my-project/ogxservers
 ```
 
-That request requires a valid bearer token in the `Authorization` header. The token is either a ServiceAccount token (mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token` inside a Pod) or an OpenShift OAuth token obtained during server-side login flow. Neither of these is available in browser JavaScript.
+That request requires a valid bearer token in the `Authorization` header. The token is either a ServiceAccount token (mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token` inside a Pod) or a user token obtained during the cluster's server-side login flow. Neither of these is available in browser JavaScript.
 
 ::: danger Security Implications
 Even if you somehow got a Kubernetes token into the browser, it would be visible in browser DevTools, vulnerable to XSS attacks, and accessible to browser extensions. One compromised token could give an attacker full access to your cluster resources. Shipping cluster credentials to the browser is a security nightmare.
@@ -203,34 +203,50 @@ You should now understand why Go is the language of choice for BFFs:
 
 </div>
 
-## The Eight BFFs in ODH Dashboard
+## The BFFs in ODH Dashboard
 
-Eight packages in the ODH Dashboard monorepo have their own Go BFF. Each one serves a distinct domain:
+Eleven packages in the ODH Dashboard monorepo have their own Go BFF, and the dashboard itself has one more: core-bff. Each package BFF serves a distinct domain:
 
 | Package | BFF Location | What It Does |
 |---|---|---|
 | **gen-ai** | `packages/gen-ai/bff/` | The largest BFF. Powers the AI playground, LlamaStack integration (model listing, inference, streaming), MCP server connections, guardrails configuration, vector store management, prompt management via MLflow, and code export. Also handles inter-BFF communication with the MaaS BFF for external model access. |
 | **model-registry** | `packages/model-registry/upstream/bff/` | Manages model registration, versioning, and artifact tracking. This BFF is a git subtree synced from the kubeflow/model-registry upstream repo, which is why it lives in `upstream/bff/` instead of just `bff/`. Provides model catalog CRUD operations. |
-| **maas** | `packages/maas/bff/` | Models-as-a-Service: manages model subscriptions, API key lifecycle, and auth policies. Other BFFs (like gen-ai) call the MaaS BFF over HTTP for token management -- it is the only BFF that acts as a service for other BFFs. |
+| **maas** | `packages/maas/bff/` | Models-as-a-Service: manages model subscriptions, API key lifecycle, and auth policies. gen-ai calls the MaaS BFF over HTTP for token management and model access. |
 | **automl** | `packages/automl/bff/` | AutoML pipeline management for tabular and timeseries data. Integrates with S3 for datasets and Model Registry for output models. Manages pipeline runs and experiment tracking. |
 | **autorag** | `packages/autorag/bff/` | RAG (Retrieval-Augmented Generation) pipeline management. Integrates with LlamaStack for vector store indexing and S3 for document storage. Manages RAG pipeline configurations and runs. |
 | **eval-hub** | `packages/eval-hub/bff/` | LM-Eval job management for model evaluation. Discovers EvalHub service CRDs in the cluster and proxies evaluation job CRUD operations. Manages evaluation configurations and results. |
 | **mlflow** | `packages/mlflow/bff/` | MLflow experiment tracking integration. Auto-discovers MLflow Custom Resources in the cluster, proxies experiment and run APIs, and provides CR lifecycle management. |
 | **agent-ops** | `packages/agent-ops/bff/` | Agent runtime management. Manages AgentRuntime CRDs for deploying and operating AI agents in the cluster. Integrates with other BFFs (gen-ai, model-registry) via inter-BFF communication for agent-related operations. |
+| **data-registry** | `packages/data-registry/bff/` | The Data Registry UI's backend. Calls the data-connect-hub BFF for connection data. |
+| **data-connect-hub** | `packages/data-connect-hub/bff/` | The Data Connect Hub UI's backend. |
+| **notebooks** | `packages/notebooks/upstream/workspaces/backend/` | The workspaces (notebooks) backend, vendored from upstream like model-registry. Served at `/notebooks/api`. |
+
+On top of these, **core-bff** (`distributions/core-bff/bff/`) is the BFF for the dashboard itself: config, cluster settings, components, connection types, serving runtimes, the Kubernetes API proxy. It is not tied to one package and follows different conventions; see [Part 7: Core BFF](/guide/core-bff/).
+
+::: info BFFs Call Each Other
+Several BFFs act as services for others, over HTTP through their `internal/integrations/bffclient/`. In production the target Service names are injected as `BFF_<TARGET>_SERVICE_NAME` env vars (`manifests/modules/<slug>/deployment.yaml`):
+
+| Caller | Calls |
+|---|---|
+| gen-ai | maas, mlflow |
+| mlflow | model-registry |
+| model-registry | mlflow |
+| data-registry | data-connect-hub |
+:::
 
 ::: info Not Every Package Needs a BFF
-Packages like `model-serving`, `notebooks`, `kserve`, and `observability` do not have BFFs. They get their data through the main dashboard backend (Fastify), which proxies requests directly to the Kubernetes API. A package only needs its own BFF when it talks to services beyond what the main backend provides -- like LlamaStack, MLflow, or S3.
+Packages like `model-serving`, `kserve`, and `observability` do not have BFFs of their own. They get their data through the platform endpoints of the main dashboard backend (Fastify, and increasingly core-bff), including the Kubernetes API proxy (`/api/k8s/*`). A package only needs its own BFF when it talks to services beyond what the main backend provides -- like LlamaStack, MLflow, or S3.
 :::
 
 ## What the BFF Does NOT Do
 
 To be clear about boundaries, here is what a BFF is **not** responsible for:
 
-- **Serve HTML/CSS/JS.** The frontend dev server (Webpack) or a static file server handles that. The BFF only serves JSON API responses.
+- **Serve the dashboard's HTML.** The frontend dev server (rspack) or the dashboard backend handles that. A module BFF mostly serves JSON -- the one exception is its own federated bundle (`remoteEntry.js` and chunks, from `static/`), which the dashboard proxies under `/_mf/<name>/`.
 - **Manage frontend state.** No Redux, no React context, no session storage. The BFF is stateless -- every request carries its own auth context.
 - **Run a database.** BFFs do not persist data. They translate and proxy between the frontend and existing backend services. The data lives in Kubernetes resources (CRDs), external services (LlamaStack, MLflow), or object storage (S3).
 - **Handle routing or navigation.** That is React Router's job. The BFF only has API routes like `/api/v1/models`, not page routes like `/models/list`.
-- **Authenticate users.** The OpenShift OAuth proxy handles login. The BFF receives the already-authenticated user's identity in HTTP headers and validates it, but it does not manage login flows.
+- **Authenticate users.** The cluster Gateway and `kube-rbac-proxy` in the dashboard pod handle authentication. The BFF receives the already-authenticated user's identity in HTTP headers and validates it, but it does not manage login flows.
 
 ## What BFF Code Looks Like at a Glance
 
@@ -284,7 +300,7 @@ That is it. One fetch call. The BFF handles everything else.
 You should now be able to:
 1. Explain why browsers cannot talk to Kubernetes directly (auth, CORS, complexity)
 2. Describe what a BFF does and does not do
-3. Name all eight BFFs and what domain each one covers
+3. Name the package BFFs, and core-bff, and what domain each one covers
 4. Read a simple BFF handler and understand the basic pattern
 
 </div>

@@ -5,7 +5,7 @@
 Let's walk through `main.go` together, like a pair programming session. I'll show you every line and explain what it does. If you've written an Express server before, most of this will feel familiar -- just with Go's characteristic explicitness.
 
 ::: warning Variations Across BFFs
-The code examples in this chapter are composites drawn from multiple BFFs (gen-ai, automl, maas). Real BFFs may differ in field names (e.g., `MockK8sClient` in gen-ai vs `MockK8Client` in automl), env var fallback patterns, and timeout values. Always check the specific BFF you're working on.
+The code examples in this chapter are composites drawn from multiple BFFs (gen-ai, automl, maas). Real BFFs may differ in field names (e.g., `MockK8sClient` in gen-ai and automl vs `MockK8Client` in core-bff and maas), env var fallback patterns, and timeout values. Always check the specific BFF you're working on.
 :::
 
 ## Your Express Server, for Comparison
@@ -92,8 +92,7 @@ Now let's add a few more flags:
 ```go
     flag.StringVar(&cfg.AuthMethod,                // Same pattern, but for a string flag
         "auth-method",                             // The flag name: --auth-method
-        getEnvAsString("AUTH_METHOD", "user_token"),// Default varies by BFF: "user_token" (gen-ai, automl, autorag, mlflow)
-                                                   // or "internal" (maas, eval-hub, agent-ops)
+        getEnvAsString("AUTH_METHOD", "user_token"),// Env fallback: core-bff, mlflow, automl/autorag only
         "Authentication method")                   // Help text
 
     flag.BoolVar(&cfg.MockK8sClient,               // Boolean flag: --mock-k8s-client
@@ -104,6 +103,10 @@ Now let's add a few more flags:
     flag.Parse()                                   // Actually parse os.Args and populate cfg fields
                                                    // Must be called after all flags are defined
 ```
+
+::: info `AUTH_METHOD` Isn't Read Everywhere
+Only core-bff, mlflow and automl/autorag read an `AUTH_METHOD` env var. gen-ai (`user_token`), maas, eval-hub and agent-ops (`internal`), model-registry, data-connect-hub and data-registry hardcode the flag default with no env fallback -- so `AUTH_METHOD=disabled make run` does nothing there unless the Makefile turns it into `--auth-method=...`. In the cluster none of this matters: every module Deployment passes `--auth-method=user_token --auth-token-header=x-forwarded-access-token` (see [Authentication & RBAC](./auth)).
+:::
 
 After `flag.Parse()`, running `go run ./cmd --port 9090 --mock-k8s-client` sets `cfg.Port` to `9090` and `cfg.MockK8sClient` to `true`. The env var fallback creates a priority chain: **CLI flag > environment variable > hardcoded default**.
 
@@ -254,6 +257,52 @@ server.headersTimeout = 30000;                     // Go: ReadTimeout
 In Go, `http.ListenAndServe()` blocks the current goroutine. If you need to do things after the server starts (like graceful shutdown), you need to run it in a goroutine with `go func() { ... }()`. The real gen-ai BFF does exactly this for graceful shutdown support.
 :::
 
+### Serving HTTPS: `pkg/tls` and the Cluster TLS Profile
+
+In the cluster every BFF serves HTTPS with an OpenShift service-serving certificate mounted at `/etc/tls/private/`. The Deployment passes `--cert-file`/`--key-file`, and `main.go` switches to `ListenAndServeTLS`. The TLS settings (minimum version, ciphers) come from the **cluster TLS security profile**, resolved by a small shared Go module at `pkg/tls` that nearly every BFF imports via a `replace` directive:
+
+```go
+// packages/gen-ai/bff/cmd/main.go (trimmed)
+if err := validateInsecureSkipVerify(cfg.InsecureSkipVerify, certFile); err != nil {
+    os.Exit(1)                                     // Refuse insecure outbound TLS outside dev
+}
+
+// ... logger setup (plus klog/zap for client-go and controller-runtime) ...
+shutdownTelemetry := telemetry.Setup(logger)       // OpenTelemetry exporter; flushed on shutdown
+
+srv := &http.Server{
+    Addr:         fmt.Sprintf(":%d", cfg.Port),
+    Handler:      app.Routes(),
+    IdleTimeout:  time.Minute,
+    ReadTimeout:  8 * time.Minute,                 // gen-ai: large uploads
+    WriteTimeout: 8 * time.Minute,
+    ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelError), // net/http errors → slog
+}
+
+if certFile != "" && keyFile != "" {
+    tlsCfg, err := tlsprofile.ServerTLSConfig(context.Background(), logger) // pkg/tls
+    if err != nil {
+        logger.Error("failed to resolve TLS configuration from cluster profile", "error", err)
+        os.Exit(1)
+    }
+    srv.TLSConfig = tlsCfg
+}
+
+go func() {
+    var err error
+    if certFile != "" && keyFile != "" {
+        err = srv.ListenAndServeTLS(certFile, keyFile) // In the cluster
+    } else {
+        err = srv.ListenAndServe()                 // Local dev: plain HTTP
+    }
+    if err != nil && err != http.ErrServerClosed {
+        logger.Error("HTTP server ListenAndServe", "error", err)
+    }
+}()
+```
+
+Locally you leave both flags empty and get plain HTTP. Because `pkg/tls` is a shared module, a change there affects every BFF that imports it -- treat it like a library, not like BFF code.
+
 ::: info Checkpoint
 We now have the complete simple version of `main.go`: parse flags, create logger, build app, start server. That's the whole story for a basic BFF. But the real BFFs in the repo are more sophisticated -- they handle graceful shutdown. Let's look at that next.
 :::
@@ -350,7 +399,7 @@ go run ./cmd --port 8080
 
 ## The Complete File
 
-Let's put it all together. Here's the simplified `main.go` with every line commented:
+Let's put it all together. Here's the simplified `main.go` with every line commented (TLS, telemetry and klog setup from the section above are left out):
 
 ```go
 package main                                       // Entry point package -- required for Go executables
@@ -413,7 +462,7 @@ func main() {                                      // Program entry point
 
     // Wait for shutdown signal
     shutdownCh := make(chan os.Signal, 1)           // Channel for OS signals
-    signal.Notify(shutdownCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+    signal.Notify(shutdownCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
     <-shutdownCh                                   // Block until signal received
 
     // Graceful shutdown

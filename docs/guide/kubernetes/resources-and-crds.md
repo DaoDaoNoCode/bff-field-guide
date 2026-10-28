@@ -43,7 +43,8 @@ spec:                              # DESIRED state -- what you want
   managementState: Managed
   gateway:
     domain: dashboard.example.com
-  deploymentMode: Standalone
+  maasPortal:
+    managementState: Removed
   components:                       # A snapshot of which DSC components are available
     modelregistry:
       managementState: Managed
@@ -87,10 +88,15 @@ type DashboardSpec struct {                          // The "spec" half of the r
 
     Observability *ObservabilitySpec `json:"observability,omitempty"`
 
-    // DeploymentMode controls how BFF modules are deployed.
-    // +kubebuilder:validation:Enum=Sidecar;Standalone     <- a "marker" comment (see below)
-    // +kubebuilder:default=Sidecar
-    DeploymentMode DeploymentMode `json:"deploymentMode,omitempty"`
+    // MaaSPortal controls the optional MaaS Portal operand.
+    MaaSPortal *MaaSPortalSpec `json:"maasPortal,omitempty"`
+}
+
+type MaaSPortalSpec struct {
+    // +kubebuilder:validation:Enum=Managed;Removed     <- a "marker" comment (see below)
+    // +kubebuilder:default=Removed
+    // +optional
+    ManagementState string `json:"managementState,omitempty"`
 }
 
 type DashboardStatus struct {                        // The "status" half

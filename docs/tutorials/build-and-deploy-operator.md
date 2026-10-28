@@ -12,7 +12,7 @@ Building and deploying the operator is like building your app's Docker image and
 
 ## Step 1: Build the Operator Image
 
-The operator ships a multi-stage `Dockerfile` (`dashboard-operator/Dockerfile`): a `golang:1.26` builder compiles a static binary, then it is copied into a minimal `ubi9/ubi-minimal` runtime. The build context is the **repo root** (the parent of `dashboard-operator/`), because the build needs sibling paths.
+The operator ships a multi-stage `Dockerfile` (`dashboard-operator/Dockerfile`): a `golang:1.26` builder compiles a static binary, then it is copied into a minimal `ubi9/ubi-minimal:9.3` runtime. The build context is the **repo root** (the parent of `dashboard-operator/`), because the image also copies the repo's `manifests/` directory to `/opt/manifests/dashboard/` and makes the `params.env` files group-writable (the operator rewrites them at reconcile time). That is why `--manifests-base-path` defaults to `/opt/manifests/dashboard`.
 
 The Makefile wraps this for you. From `dashboard-operator/`:
 
@@ -61,22 +61,12 @@ podman push quay.io/<you>/odh-dashboard-operator:dev
 
 **What you should see:** layer digests uploading, ending in the manifest being written. Make sure the repo is public (or your cluster has a pull secret), or the pod will `ImagePullBackOff`.
 
-## Step 3: Install the CRD
+## Step 3: The CRD Comes With the Chart
 
-The operator watches the `Dashboard` custom resource, which the cluster does not know about until you install its CRD. Apply the generated CRD:
-
-```bash
-oc apply -f dashboard-operator/config/crd/bases/
-```
-
-**What you should see:**
-
-```
-customresourcedefinition.apiextensions.k8s.io/dashboards.components.platform.opendatahub.io created
-```
+The operator watches the `Dashboard` custom resource, which the cluster does not know about until its CRD is installed. You don't need a separate step for that: the Helm chart ships the CRD in `charts/dashboard/crds/`, and `helm install` applies it before anything else. (`oc apply -f dashboard-operator/config/crd/bases/` still works if you want the CRD without the chart.)
 
 ::: tip If You Edited the CRD Types
-Changed anything in `dashboard-operator/api/v1alpha1/`? Regenerate before applying, or the cluster has a stale schema:
+Changed anything in `dashboard-operator/api/v1alpha1/`? Regenerate before installing, or the cluster gets a stale schema:
 
 ```bash
 cd dashboard-operator
@@ -84,20 +74,29 @@ make manifests        # regenerate CRD YAML from Go types
 make sync-chart-crds  # copy it into the Helm chart too
 ```
 
-`make check-chart-crds` fails CI if the chart CRD drifts from the generated one -- run `sync-chart-crds` whenever you touch the types.
+`make check-chart-crds` fails CI if the chart CRD drifts from the generated one -- run `sync-chart-crds` whenever you touch the types. Note that Helm installs files in `crds/` only on first install and never upgrades them; after a schema change, `oc apply` the new CRD yourself.
 :::
 
 ## Step 4: Deploy the Operator with Helm
 
-The operator deploys via its Helm chart, which bundles the CRD, RBAC, and the manager Deployment. Point it at the image you pushed:
+The operator deploys via its Helm chart, which bundles the CRD, RBAC, the config ConfigMap and the manager Deployment. Point it at the image you pushed:
 
 ```bash
 oc new-project odh-dashboard-operator-system 2>/dev/null || true
 helm install dashboard dashboard-operator/charts/dashboard \
   --namespace odh-dashboard-operator-system \
+  --set namespace=odh-dashboard-operator-system \
+  --set namePrefix= \
   --set image.repository=quay.io/<you>/odh-dashboard-operator \
   --set image.tag=dev
 ```
+
+Two flags are easy to miss:
+
+- **`--set namespace=...`** -- the chart's `values.yaml` has `namespace: opendatahub`, and its templates use `default .Release.Namespace .Values.namespace`. A non-empty value wins, so without this flag everything lands in `opendatahub` regardless of `--namespace`.
+- **`--set namePrefix=`** -- the chart default is `namePrefix: odh-`, which names the Deployment `odh-dashboard-operator`. The ODH Operator sets it to `""`, and so do we, so the Deployment is `dashboard-operator` (and matches what dev mode assumes in Step 6). Keep the default and every `deploy/dashboard-operator` below becomes `deploy/odh-dashboard-operator`.
+
+The operator's applications namespace (where the dashboard itself runs) defaults to the operator namespace, because the chart doesn't set `APPLICATIONS_NAMESPACE`.
 
 **What you should see:**
 
@@ -118,11 +117,11 @@ NAME                                    READY   STATUS    RESTARTS   AGE
 dashboard-operator-xxxxxxxxxx-xxxxx     1/1     Running   0          20s
 ```
 
-If it is `CrashLoopBackOff`, check the logs -- the most common cause is a missing `--namespace` (the operator refuses to start without it; see `cmd/manager/main.go:69`).
+If it is `CrashLoopBackOff`, check the logs -- the most common cause is a missing `--namespace` (the operator refuses to start without it or `OPERATOR_NAMESPACE`; see `cmd/manager/main.go` around L69-75).
 
 ## Step 5: Apply a Dashboard CR
 
-The operator is running but idle -- it has nothing to reconcile. Create a `Dashboard` CR:
+The operator is running but idle -- it has nothing to reconcile. Create a `Dashboard` CR. It is **cluster-scoped**, so there is no `metadata.namespace`:
 
 ```yaml
 # dashboard-cr.yaml
@@ -130,10 +129,14 @@ apiVersion: components.platform.opendatahub.io/v1alpha1
 kind: Dashboard
 metadata:
   name: default-dashboard
-  namespace: odh-dashboard-operator-system
-spec:
-  # module overrides, gateway config, etc. -- see the CRD page
+spec: {}
+  # managementState defaults to Managed.
+  # Off OpenShift, add a domain to get a URL:
+  # gateway:
+  #   domain: dashboard.example.com
 ```
+
+With no `spec.components` map at all (`nil`), the DSC gate is skipped and **every** module in the registry deploys -- your module included. Modules with a DSC requirement are only filtered out once `spec.components` is set. See [Modules & Federation](../guide/operator/modules-and-federation).
 
 ```bash
 oc apply -f dashboard-cr.yaml
@@ -145,19 +148,21 @@ oc apply -f dashboard-cr.yaml
 oc logs -n odh-dashboard-operator-system deploy/dashboard-operator -f
 ```
 
+Trimmed (the development zap format adds timestamps and the controller name to each line):
+
 ```
-level=INFO msg="Reconciling Dashboard" name=default-dashboard
-level=INFO msg="Applying module manifests" module=myModule
-level=INFO msg="Updated federation ConfigMap" changed=true
-level=INFO msg="Reconcile complete" requeue=false
+INFO  Reconciling Dashboard  {"name": "default-dashboard"}
+INFO  Deployed module  {"module": "myModule", "slug": "my-module"}
+INFO  Patched federation config hash on deployment  {"deployment": "odh-dashboard", "hash": "..."}
+INFO  Dashboard reconciled successfully  {"url": "...", "modules": 12}
 ```
 
-The module you registered in Tutorial 8 gets its manifests applied, its entry added to the federation ConfigMap, and -- if the ConfigMap changed -- the dashboard rolling-restarts. That is the 14-step pipeline running for real.
+The module you registered in Tutorial 8 gets its manifests applied, its entry added to the federation ConfigMap, and -- if the ConfigMap changed -- the dashboard rolling-restarts. That is the reconcile pipeline running for real. If the Route isn't admitted yet you'll see `Dashboard reconcile cycle complete, requeuing` instead, and a retry 10 seconds later.
 
 Inspect the CR's status to see conditions the reconciler wrote back:
 
 ```bash
-oc get dashboard default-dashboard -n odh-dashboard-operator-system -o yaml | less
+oc get dashboard default-dashboard -o yaml | less
 ```
 
 Look for `status.conditions` and per-module status -- the operator reports what it did through the status subresource.
@@ -172,7 +177,14 @@ First, scale the in-cluster operator to zero so two reconcilers do not fight:
 oc scale deploy/dashboard-operator -n odh-dashboard-operator-system --replicas=0
 ```
 
-Then run the manager from source. It needs a namespace and a path to the manifests directory (in-cluster this is `/opt/manifests/dashboard`; locally it is the repo's `manifests/`):
+Then run the manager from source. It needs a namespace and a path to the manifests directory (in-cluster this is `/opt/manifests/dashboard`; locally it is the repo's `manifests/`). Export the names the chart would normally inject, so teardown protection and image resolution behave the same as in-cluster:
+
+```bash
+export OPERATOR_DEPLOYMENT_NAME=dashboard-operator          # matches --set namePrefix=
+export OPERATOR_SERVICE_ACCOUNT_NAME=dashboard-operator
+export OPERATOR_CONFIGMAP_NAME=odh-dashboard-config
+# export RELATED_IMAGE_ODH_MOD_ARCH_MY_MODULE_IMAGE=quay.io/<you>/my-module:dev   # optional image overrides
+```
 
 ```bash
 cd dashboard-operator
@@ -182,18 +194,23 @@ go run ./cmd/manager \
   --leader-elect=false
 ```
 
-Or use the Makefile shortcut, which wires the same flags:
+Or use the Makefile shortcut, which passes `--namespace` and `--manifests-base-path` (leader election is already off by default):
 
 ```bash
 make run NAMESPACE=odh-dashboard-operator-system MANIFESTS_BASE_PATH=../manifests
 ```
 
+::: warning Dev Mode Rewrites `params.env` in Your Checkout
+Before rendering, the operator writes the computed parameters and image refs into the `params.env` files under `--manifests-base-path` (`writeParamsEnv`, called for the main manifests and for every module). Pointed at `../manifests`, that is **your working tree**: after a run, `git status` shows modified `params.env` files. Run `git restore manifests/` before committing, or point `--manifests-base-path` at a copy (`cp -r ../manifests /tmp/dash-manifests`).
+:::
+
 **What you should see:** the manager starts locally and immediately reconciles the existing CR, logging to your terminal:
 
 ```
-level=INFO msg="starting manager"
-level=INFO msg="Starting Controller" controller=dashboard
-level=INFO msg="Reconciling Dashboard" name=default-dashboard
+INFO  setup  Detected platform  {"platform": "..."}
+INFO  setup  Starting manager
+INFO  Starting Controller  {"controller": "dashboard", ...}
+INFO  Reconciling Dashboard  {"name": "default-dashboard"}
 ```
 
 Now edit a reconciler file, `Ctrl+C`, and re-run -- seconds, not minutes. This is your inner loop.
@@ -207,7 +224,7 @@ dlv debug ./cmd/manager -- \
   --manifests-base-path=../manifests --leader-elect=false
 ```
 
-Set a breakpoint in `Reconcile` (`dashboard_reconciler.go`), apply/modify the CR, and step through the pipeline live. `--leader-elect=false` matters -- leader election adds startup latency and lease churn you do not want while debugging.
+Set a breakpoint in `Reconcile` (`internal/controller/dashboard_controller.go`), apply/modify the CR, and step through the pipeline live. `--leader-elect=false` matters -- leader election adds startup latency and lease churn you do not want while debugging.
 :::
 
 ## Step 7: Clean Up
@@ -219,9 +236,9 @@ When you are done, restore the in-cluster operator (or tear everything down):
 oc scale deploy/dashboard-operator -n odh-dashboard-operator-system --replicas=1
 
 # Or remove everything
-oc delete -f dashboard-cr.yaml
+oc delete -f dashboard-cr.yaml        # cluster-scoped, no -n
 helm uninstall dashboard -n odh-dashboard-operator-system
-oc delete -f dashboard-operator/config/crd/bases/
+oc delete crd dashboards.components.platform.opendatahub.io   # helm uninstall keeps CRDs
 ```
 
 ::: warning Deleting the CR Triggers Teardown, Not Just Deletion
@@ -238,10 +255,9 @@ Before finishing, verify:
 
 - [ ] `make docker-build` (or `podman build`) produces an image, `linux/amd64` if on Apple Silicon
 - [ ] The image is pushed and pullable by the cluster
-- [ ] `oc apply -f config/crd/bases/` created the `Dashboard` CRD
-- [ ] `helm install` deployed a `Running` operator pod
+- [ ] `helm install` (with `--set namespace=` and `--set namePrefix=`) created the `Dashboard` CRD and a `Running` operator pod in your namespace
 - [ ] Applying a `Dashboard` CR produces reconcile logs and populates `status.conditions`
-- [ ] `make run` (or `go run ./cmd/manager`) runs the operator locally against the cluster
+- [ ] `make run` (or `go run ./cmd/manager`) runs the operator locally against the cluster, and you ran `git restore manifests/` afterwards
 - [ ] You can explain why you scale the in-cluster operator to 0 before running dev mode
 
 </div>
@@ -251,7 +267,7 @@ Before finishing, verify:
 - [The Reconciler](../guide/operator/reconciler) -- the pipeline you just watched run
 - [Operator Testing](../guide/operator/testing) -- envtest, for iterating without a cluster at all
 - [Development Workflow](../guide/workflow/index) -- Makefile targets, debugging, common mistakes
-- `.claude/local-specs/dashboard-operator-unified.md` -- the full deploy + dev-mode reference
+- `docs/dashboard-operator.md` and `dashboard-operator/AGENTS.md` in the repo -- the operator's own docs (the latter still names some old file names; trust the code)
 :::
 
 ## Congratulations -- You've Finished the Tutorials

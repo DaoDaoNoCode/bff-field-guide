@@ -6,10 +6,10 @@ Debugging Go in this repo is mostly about knowing which lever to pull: crank up 
 
 ## Structured Logging with `slog`
 
-Both the operator and the BFFs log with Go's structured logger. Instead of interpolating strings, you pass **key-value pairs** -- so logs are machine-parseable and greppable:
+Both the operator and the BFFs log with structured loggers -- `logr` (backed by zap) in the operator, the standard library's `log/slog` in the BFFs. Instead of interpolating strings, you pass **key-value pairs** -- so logs are machine-parseable and greppable:
 
 ```go
-// Operator -- controller-runtime's logger (wraps slog), pulled from context
+// Operator -- controller-runtime's logr logger (zap underneath), pulled from context
 logger := log.FromContext(ctx)
 logger.Info("Reconciling Dashboard", "name", dashboard.Name)
 logger.Error(err, "Failed to deploy", "module", name)
@@ -23,11 +23,11 @@ slog.Debug("Request received", "path", r.URL.Path)
 Don't write `slog.Info(fmt.Sprintf("starting on port %d", port))`. Pass the value as a field instead: `slog.Info("starting", "port", port)`. The structured logger handles formatting, and keeping values as fields is what makes logs filterable (`| grep port=8080`) and safe. This is the Go equivalent of preferring structured logging over `console.log("port: " + port)` in Node.
 :::
 
-Turn on debug output with a flag -- both binaries accept `--log-level`:
+Turn on debug output with a flag. The two binaries spell it differently -- the operator binds controller-runtime's zap flags, the BFFs have their own `--log-level`:
 
 ```bash
-./bin/manager --log-level debug    # Operator
-./bin/bff --log-level debug        # BFF
+./bin/manager --zap-log-level=debug   # Operator (zap flags; also --zap-devel, --zap-encoder)
+./bin/bff --log-level=debug           # BFF (or LOG_LEVEL=debug)
 ```
 
 ## Delve: The Interactive Debugger
@@ -59,8 +59,8 @@ The `-N -l` flags disable inlining and optimization so the debugger's line numbe
 The `--mock-*` flags aren't just for frontend devs -- they're a debugging tool. Mock the parts you *aren't* investigating so the bug can't hide behind an unrelated failure:
 
 ```bash
-# Mock everything -- no cluster, no upstreams (pure handler-logic debugging)
-./bin/bff --mock-k8s-client --mock-http-client --mock-bff-clients
+# core-bff / maas: mock everything -- no cluster, no upstreams (pure handler-logic debugging)
+./bin/bff --mock-k8s-client --mock-http-client
 
 # Real cluster, mocked upstreams (debug K8s interactions in isolation)
 ./bin/bff --mock-http-client
@@ -69,13 +69,18 @@ The `--mock-*` flags aren't just for frontend devs -- they're a debugging tool. 
 ./bin/bff
 ```
 
-The gen-ai BFF adds finer-grained mocks for its specific upstreams:
+`--mock-http-client` exists only in [core-bff](/guide/core-bff/) and maas. gen-ai has no generic HTTP mock; instead it has finer-grained mocks for its specific upstreams:
 
 ```bash
+--mock-k8s-client      # envtest-backed Kubernetes
 --mock-ls-client       # Mock Llama Stack
+--mock-mcp-client      # Mock MCP servers
 --mock-mlflow-client   # Mock MLflow
---mock-nemo-client     # Mock NeMo Guardrails
+--mock-nemo            # Mock NeMo Guardrails (note: no "-client" suffix)
+--mock-bff-clients     # Mock inter-BFF calls
 ```
+
+`--mock-k8s-client` starts envtest, so it needs the envtest binaries -- run through `make run MOCK_K8S_CLIENT=true ...`, which exports `ENVTEST_ASSETS`, rather than a bare binary or `go run`.
 
 ::: info Mock Inter-BFF Calls Too
 `--mock-bff-clients` (or the `MOCK_BFF_CLIENTS=true` env var) fakes calls to *other BFFs*, so you can debug one BFF without standing up the ones it depends on. See [Inter-BFF Communication](/guide/deep-dive/inter-bff-communication#mock-mode-developing-one-bff-at-a-time) for how it works.
@@ -91,15 +96,16 @@ go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 setup-envtest use
 ```
 
-The Makefiles automate this, but if you run `go test` directly, point Go at the binaries yourself:
+The Makefiles automate this, but if you run `go test` directly, point Go at the binaries yourself. The BFFs read **`ENVTEST_ASSETS`** (see `k8smocks/base_testenv.go`), using the Kubernetes version pinned in the BFF's Makefile (`ENVTEST_K8S_VERSION`, e.g. 1.29.3):
 
 ```bash
-export KUBEBUILDER_ASSETS=$(setup-envtest use --print path)
+# BFF
+export ENVTEST_ASSETS=$(setup-envtest use 1.29.3 -p path)
 go test ./...
 ```
 
-::: info Only BFFs Need This
-The operator's tests are pure unit tests (fake clients, no in-process API server), so they never need `KUBEBUILDER_ASSETS`. If you hit an envtest error in the *operator*, you're almost certainly in the wrong module -- check your `cd`.
+::: info The Operator Uses envtest Too -- With a Different Variable
+The operator's `make test` is pure unit tests, but `make test-integration` runs `-tags=integration` tests against envtest and sets **`KUBEBUILDER_ASSETS`** (the controller-runtime convention) with `ENVTEST_K8S_VERSION=1.31.0`. So: `ENVTEST_ASSETS` for BFFs, `KUBEBUILDER_ASSETS` for operator integration tests. If you export the wrong one, the test can't find its API server. See [Make Targets](./make-targets#testing-three-layers).
 :::
 
 ## Common Mistakes
@@ -138,31 +144,39 @@ return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 return fmt.Errorf("failed to deploy: %w", err)   // not %v
 ```
 
-### 5. Missing `Owns()` registration
+### 5. Missing `Owns()` registration (and cache scoping)
 
-**Symptom:** The controller creates a Deployment/Service/ConfigMap, but doesn't react when something else deletes or edits it -- until the next periodic requeue.
-**Fix:** Register `Owns()` for every resource type the controller creates, so changes to those objects trigger a reconcile:
+**Symptom:** The controller creates a new kind of resource, but doesn't react when something else deletes or edits it -- or reads of it fail outright.
+**Fix:** Register `Owns()` for every resource type the controller creates, so changes to those objects trigger a reconcile. The real setup (`controller_setup.go`, trimmed) owns a long list, some with predicates to ignore noise:
 
 ```go
 ctrl.NewControllerManagedBy(mgr).
     For(&v1alpha1.Dashboard{}).
     Owns(&appsv1.Deployment{}).
-    Owns(&corev1.Service{}).
-    Owns(&corev1.ConfigMap{}).
-    Complete(r)
+    Owns(&corev1.Service{}, builder.WithPredicates(serviceChangedPredicate())).
+    Owns(&corev1.ServiceAccount{}).
+    Owns(&networkingv1.NetworkPolicy{}).
+    Owns(&rbacv1.ClusterRole{}).
+    Owns(&rbacv1.ClusterRoleBinding{}).
+    Owns(&rbacv1.Role{}).
+    Owns(&rbacv1.RoleBinding{}).
+    Owns(&policyv1.PodDisruptionBudget{}, builder.WithPredicates(podDisruptionBudgetChangedPredicate()))
+    // ... plus Watches(...), then addConfigMapWatches and optional owned types
 ```
+
+ConfigMaps are **not** `Owns()`: they get dedicated caches in `controller_configmaps.go` (`addConfigMapWatches`). And the manager's shared cache is scoped by `ManagerCacheOptions` (`controller_cache.go`) to labelled, owned resources -- it rejects reads for types without a registered informer. A new owned type must be registered there too, or reads fail.
 
 ### 6. Confusing `core-bff/bff/` with `dashboard-operator/`
 
 **Symptom:** Applying controller-runtime patterns to BFF code, or HTTP-handler patterns to the operator.
-**Fix:** They're separate modules with separate worlds -- don't cross the wires:
+**Fix:** They're separate modules with separate worlds -- don't cross the wires (more on core-bff in the [Core BFF section](/guide/core-bff/architecture)):
 
 | Aspect | `dashboard-operator/` | `distributions/core-bff/bff/` |
 |---|---|---|
 | Pattern | Kubernetes operator | HTTP server |
 | Framework | controller-runtime | httprouter + custom middleware |
 | Entry point | Reconcile loop | HTTP request handlers |
-| Testing | Fake client | envtest + httptest |
+| Testing | Fake client (unit), envtest (integration) | envtest + httptest |
 
 ### 7. Adding a module without updating the full chain
 
@@ -191,7 +205,7 @@ make lint && make test
 ```
 
 ::: tip Key Takeaway
-Reach for the right lever: `--log-level debug` + structured `slog` fields for tracing, Delve (or the VS Code GUI) for stepping, `--mock-*` flags to isolate the layer you're investigating, and `setup-envtest` when BFF tests can't find their API-server binaries. Then internalize the Common Mistakes -- especially the codegen pair (#1), never blocking `Reconcile` (#3), and the corrected module-onboarding chain (#7, no `support.go`/`module_deploy.go` edits).
+Reach for the right lever: `--log-level=debug` (BFF) or `--zap-log-level=debug` (operator) + structured fields for tracing, Delve (or the VS Code GUI) for stepping, `--mock-*` flags to isolate the layer you're investigating, and `setup-envtest` when tests can't find their API-server binaries (`ENVTEST_ASSETS` for BFFs, `KUBEBUILDER_ASSETS` for operator integration tests). Then internalize the Common Mistakes -- especially the codegen pair (#1), never blocking `Reconcile` (#3), and the corrected module-onboarding chain (#7, no `support.go`/`module_deploy.go` edits).
 :::
 
 ::: info See Also
@@ -212,7 +226,7 @@ Make sure you can answer these:
 - [ ] Why pass log values as key-value fields instead of `fmt.Sprintf`-ing them into the message?
 - [ ] How do you pass flags to your program (not to Delve) when running `dlv debug`?
 - [ ] How do the `--mock-*` flags help you *debug*, not just develop?
-- [ ] What does "envtest binaries not found" mean, and which module never hits it?
+- [ ] What does "envtest binaries not found" mean, and which variable does a BFF vs. the operator's `make test-integration` use to find them?
 - [ ] Why must you run `make generate && make manifests` after a type change?
 - [ ] In the current model, which files do you *not* edit when onboarding a module?
 

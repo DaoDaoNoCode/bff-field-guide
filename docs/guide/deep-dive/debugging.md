@@ -67,7 +67,8 @@ Add this to `.vscode/launch.json` in your project root:
       "--dev-mode",
       "--mock-k8s-client",
       "--mock-pipeline-server-client",
-      "--mock-s3-client"
+      "--mock-s3-client",
+      "--mock-model-registry-client"
     ],
     "env": {
       "PORT": "4003"
@@ -79,7 +80,7 @@ Add this to `.vscode/launch.json` in your project root:
 Adjust `program` to point at the `cmd` directory of whichever BFF you're debugging. The `args` array mirrors what you'd pass on the command line -- mock flags keep the server running without a real cluster.
 
 ::: warning Mock Flags Differ by BFF
-Each BFF has its own set of mock flags. The automl example above uses `--mock-pipeline-server-client` and `--mock-s3-client`, but gen-ai has `--mock-ls-client`, `--mock-mcp-client`, `--mock-mlflow-client`, `--mock-nemo`, and `--mock-bff-clients`. The core-bff has `--mock-k8s-client`, `--mock-http-client`, and `--mock-bff-clients`. Check `cmd/main.go` in your specific BFF for the full list of available flags.
+Each BFF has its own set of mock flags. The automl example above uses `--mock-pipeline-server-client`, `--mock-s3-client` and `--mock-model-registry-client`. automl refuses to start with any mock flag unless `--dev-mode` is also set, `--mock-s3-client` requires `--mock-k8s-client`, and in dev mode with a mock on it switches auth to `disabled` for you. gen-ai has `--mock-ls-client`, `--mock-mcp-client`, `--mock-mlflow-client`, `--mock-nemo`, and `--mock-bff-clients`. The [core-bff](/guide/core-bff/) has `--mock-k8s-client`, `--mock-http-client`, and `--mock-bff-clients`. Check `cmd/main.go` in your specific BFF for the full list of available flags.
 :::
 
 ### Step 3: Set Breakpoints and Run
@@ -194,7 +195,7 @@ Go tests run in VS Code just like Jest tests. Above every `func Test...` functio
 Click **debug test** to launch that single test with Delve attached. Your breakpoints work, the Variables panel works, everything works exactly like debugging the server -- except the test runner is the entry point instead of `main.go`.
 
 ::: info Gen-ai Uses Ginkgo/Gomega
-The gen-ai BFF uses the [Ginkgo](https://onsi.github.io/ginkgo/) test framework with [Gomega](https://onsi.github.io/gomega/) matchers in addition to testify. When debugging gen-ai tests, you may need to set breakpoints inside `Describe`/`It` blocks. All other BFFs use testify exclusively.
+The gen-ai, maas and model-registry BFFs use the [Ginkgo](https://onsi.github.io/ginkgo/) test framework with [Gomega](https://onsi.github.io/gomega/) matchers in addition to testify (check `onsi/ginkgo` in the BFF's `go.mod`). When debugging those tests, you may need to set breakpoints inside `Describe`/`It` blocks. The others use testify only.
 :::
 
 For more control, add a test configuration to `.vscode/launch.json`:
